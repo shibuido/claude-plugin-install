@@ -197,6 +197,14 @@ To turn this into a proper `claude-plugin-install` utility:
    - `--update` to update plugin versions
    - Shell completions (bash, zsh, fish)
 
+## Where to Report Issues
+
+| Issue Type | Where to Report |
+|------------|-----------------|
+| Claude Code plugin name collision bug | https://github.com/anthropics/claude-code/issues/14202 |
+| This workaround script | https://github.com/shibuido/claude-plugin-install/issues |
+| Superpowers plugin specific | https://github.com/obra/superpowers-marketplace/issues/11 |
+
 ## Attribution
 
 Developed with Claude Code (Opus 4.5) assistance.
