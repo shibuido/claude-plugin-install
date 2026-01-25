@@ -1,0 +1,647 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
+"""
+claude-plugin-install - Fix Claude Code plugin installation bugs
+
+Workaround for Claude Code bug where plugin installation fails when a plugin
+with the same name exists in multiple marketplaces.
+
+Usage:
+    ./claude-plugin-install -p plugin@marketplace [options]
+
+Examples:
+    ./claude-plugin-install -p superpowers@superpowers-marketplace
+    ./claude-plugin-install -p superpowers@superpowers-marketplace -y  # non-interactive
+    ./claude-plugin-install -p superpowers@superpowers-marketplace -n  # dry-run
+
+Upstream issues:
+    https://github.com/anthropics/claude-code/issues/20593
+    https://github.com/anthropics/claude-code/issues/14202
+"""
+
+import argparse
+import json
+import os
+import shutil
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Optional
+
+
+class Colors:
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    RED = "\033[91m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    BLUE = "\033[94m"
+    MAGENTA = "\033[95m"
+    CYAN = "\033[96m"
+
+
+def color(text: str, c: str) -> str:
+    return f"{c}{text}{Colors.RESET}"
+
+
+def log_info(msg: str) -> None:
+    print(f"{color('[INFO]', Colors.BLUE)} {msg}")
+
+
+def log_success(msg: str) -> None:
+    print(f"{color('[OK]', Colors.GREEN)} {msg}")
+
+
+def log_warn(msg: str) -> None:
+    print(f"{color('[WARN]', Colors.YELLOW)} {msg}")
+
+
+def log_error(msg: str) -> None:
+    print(f"{color('[ERROR]', Colors.RED)} {msg}", file=sys.stderr)
+
+
+def log_step(msg: str) -> None:
+    print(f"\n{color('▶', Colors.CYAN)} {color(msg, Colors.BOLD)}")
+
+
+def log_verbose(msg: str, verbose: bool) -> None:
+    if verbose:
+        print(f"{color('[DEBUG]', Colors.MAGENTA)} {msg}")
+
+
+def get_known_marketplaces() -> list[str]:
+    """Get list of known marketplaces from Claude Code config."""
+    path = Path.home() / ".claude" / "plugins" / "known_marketplaces.json"
+    if not path.exists():
+        return []
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return list(data.keys())
+    except (json.JSONDecodeError, IOError):
+        return []
+
+
+def find_similar_names(target: str, candidates: list[str], threshold: float = 0.6) -> list[str]:
+    """Find similar names using simple character-based similarity."""
+    def similarity(a: str, b: str) -> float:
+        a, b = a.lower(), b.lower()
+        if a == b:
+            return 1.0
+        if a in b or b in a:
+            return 0.8
+        common = sum(1 for c in a if c in b)
+        return common / max(len(a), len(b))
+
+    similar = []
+    for candidate in candidates:
+        if similarity(target, candidate) >= threshold:
+            similar.append(candidate)
+    return similar
+
+
+def print_banner(plugin_name: str, marketplace: str) -> None:
+    plugin_key = f"{plugin_name}@{marketplace}"
+    print(color(f"""
+╔══════════════════════════════════════════════════════════════════════════════╗
+║        CLAUDE CODE PLUGIN INSTALLATION FIX                                   ║
+║                                                                              ║
+║  Plugin: {plugin_key:<63} ║
+║                                                                              ║
+║  This script applies a workaround for the plugin installation bug.           ║
+║  All files will be backed up before modification.                            ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+""", Colors.CYAN))
+
+
+def print_debug_info(error_context: str, locals_snapshot: dict[str, Any]) -> None:
+    print(color("""
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  DEBUG INFORMATION - Please include this when reporting issues               ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+""", Colors.RED))
+
+    debug_info = {
+        "timestamp": datetime.now().isoformat(),
+        "python_version": sys.version,
+        "platform": sys.platform,
+        "cwd": os.getcwd(),
+        "error_context": error_context,
+        "home": str(Path.home()),
+        "relevant_state": {k: str(v) for k, v in locals_snapshot.items() if not k.startswith('_')}
+    }
+
+    print("```json")
+    print(json.dumps(debug_info, indent=2))
+    print("```")
+    print(color("""
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  WHERE TO REPORT                                                             ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║  For the UPSTREAM Claude Code bug (plugin name collision):                   ║
+║    Comment "me too" or describe your issue at:                               ║
+║    https://github.com/anthropics/claude-code/issues/14202                    ║
+║                                                                              ║
+║  For issues with THIS WORKAROUND SCRIPT:                                     ║
+║    https://github.com/shibuido/claude-plugin-install/issues                  ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+""", Colors.YELLOW))
+
+
+def ask_confirmation(prompt: str, non_interactive: bool) -> bool:
+    if non_interactive:
+        log_info(f"Non-interactive mode: auto-confirming '{prompt}'")
+        return True
+    response = input(f"\n{color('?', Colors.YELLOW)} {prompt} [y/N]: ").strip().lower()
+    return response in ('y', 'yes')
+
+
+def backup_file(filepath: Path, verbose: bool) -> Optional[Path]:
+    if not filepath.exists():
+        log_verbose(f"File does not exist, no backup needed: {filepath}", verbose)
+        return None
+
+    timestamp = datetime.now().strftime("%Y-%m-%d--%H-%M-%S")
+    backup_path = filepath.with_suffix(f"{filepath.suffix}.bak.{timestamp}")
+
+    log_verbose(f"Creating backup: {filepath} -> {backup_path}", verbose)
+    shutil.copy2(filepath, backup_path)
+    log_success(f"Backed up: {backup_path}")
+    return backup_path
+
+
+def get_paths(scope: str, project_path: Path, plugin_name: str, marketplace: str) -> dict[str, Path]:
+    home = Path.home()
+    claude_home = home / ".claude"
+
+    paths = {
+        "installed_plugins": claude_home / "plugins" / "installed_plugins.json",
+        "known_marketplaces": claude_home / "plugins" / "known_marketplaces.json",
+        "plugin_cache": claude_home / "plugins" / "cache" / marketplace / plugin_name,
+    }
+
+    if scope == "user":
+        paths["settings"] = claude_home / "settings.json"
+    elif scope == "project-shared":
+        paths["settings"] = project_path / ".claude" / "settings.json"
+    else:  # project-local (default)
+        paths["settings"] = project_path / ".claude" / "settings.local.json"
+
+    paths["project_claude_dir"] = project_path / ".claude"
+
+    return paths
+
+
+def verify_assumptions(paths: dict[str, Path], marketplace: str, plugin_name: str, verbose: bool) -> tuple[bool, list[str]]:
+    errors = []
+
+    log_step("Verifying assumptions...")
+
+    if not paths["installed_plugins"].exists():
+        errors.append(f"installed_plugins.json not found at: {paths['installed_plugins']}")
+    else:
+        log_success(f"Found installed_plugins.json")
+        log_verbose(f"  Path: {paths['installed_plugins']}", verbose)
+
+    if not paths["known_marketplaces"].exists():
+        errors.append(f"known_marketplaces.json not found at: {paths['known_marketplaces']}")
+    else:
+        log_success(f"Found known_marketplaces.json")
+
+        try:
+            with open(paths["known_marketplaces"]) as f:
+                marketplaces = json.load(f)
+            if marketplace not in marketplaces:
+                similar = find_similar_names(marketplace, list(marketplaces.keys()))
+                err_msg = f"'{marketplace}' not found in known_marketplaces.json."
+                if similar:
+                    err_msg += f" Did you mean: {', '.join(similar)}?"
+                else:
+                    err_msg += f" Run: /plugin marketplace add OWNER/{marketplace}"
+                errors.append(err_msg)
+            else:
+                log_success(f"'{marketplace}' is registered")
+                log_verbose(f"  Config: {json.dumps(marketplaces[marketplace], indent=2)}", verbose)
+        except json.JSONDecodeError as e:
+            errors.append(f"Invalid JSON in known_marketplaces.json: {e}")
+
+    if not paths["plugin_cache"].exists():
+        errors.append(f"Plugin cache not found at: {paths['plugin_cache']}. "
+                     f"The marketplace may not have been synced. Try: /plugin marketplace add OWNER/{marketplace}")
+    else:
+        log_success(f"Found plugin cache for '{plugin_name}'")
+        versions = list(paths["plugin_cache"].iterdir())
+        if versions:
+            log_verbose(f"  Available versions: {[v.name for v in versions]}", verbose)
+
+    return (len(errors) == 0, errors)
+
+
+def get_plugin_version(paths: dict[str, Path]) -> Optional[str]:
+    cache_path = paths["plugin_cache"]
+    if not cache_path.exists():
+        return None
+
+    versions = sorted(cache_path.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+    if versions:
+        return versions[0].name
+    return None
+
+
+def check_already_installed(paths: dict[str, Path], project_path: Path, plugin_key: str, verbose: bool) -> bool:
+    if not paths["installed_plugins"].exists():
+        return False
+
+    try:
+        with open(paths["installed_plugins"]) as f:
+            data = json.load(f)
+
+        if plugin_key not in data.get("plugins", {}):
+            return False
+
+        installations = data["plugins"][plugin_key]
+        project_str = str(project_path)
+
+        for inst in installations:
+            if inst.get("scope") == "user":
+                log_warn(f"{plugin_key} is installed at user scope (globally)")
+                return True
+            if inst.get("projectPath") == project_str:
+                log_warn(f"{plugin_key} is already installed for this project")
+                return True
+
+        return False
+    except (json.JSONDecodeError, KeyError) as e:
+        log_verbose(f"Error checking installation: {e}", verbose)
+        return False
+
+
+def update_installed_plugins(paths: dict[str, Path], project_path: Path, scope: str,
+                            plugin_key: str, verbose: bool) -> bool:
+    filepath = paths["installed_plugins"]
+
+    try:
+        with open(filepath) as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        log_error(f"Failed to read {filepath}: {e}")
+        return False
+
+    version = get_plugin_version(paths) or "unknown"
+    now = datetime.now().isoformat()
+
+    new_entry: dict[str, Any] = {
+        "installPath": str(paths["plugin_cache"] / version),
+        "version": version,
+        "installedAt": now,
+        "lastUpdated": now,
+    }
+
+    if scope == "user":
+        new_entry["scope"] = "user"
+    else:
+        new_entry["scope"] = "local"
+        new_entry["projectPath"] = str(project_path)
+
+    if "plugins" not in data:
+        data["plugins"] = {}
+
+    if plugin_key not in data["plugins"]:
+        data["plugins"][plugin_key] = []
+
+    data["plugins"][plugin_key].append(new_entry)
+
+    log_verbose(f"New entry: {json.dumps(new_entry, indent=2)}", verbose)
+
+    try:
+        with open(filepath, 'w') as f:
+            json.dump(data, f, indent=2)
+        log_success(f"Updated {filepath}")
+        return True
+    except IOError as e:
+        log_error(f"Failed to write {filepath}: {e}")
+        return False
+
+
+def update_settings(paths: dict[str, Path], plugin_key: str, verbose: bool) -> bool:
+    filepath = paths["settings"]
+
+    if filepath.exists():
+        try:
+            with open(filepath) as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            log_error(f"Invalid JSON in {filepath}: {e}")
+            return False
+    else:
+        data = {}
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+
+    if "enabledPlugins" not in data:
+        data["enabledPlugins"] = {}
+
+    data["enabledPlugins"][plugin_key] = True
+
+    log_verbose(f"Settings will be: {json.dumps(data, indent=2)}", verbose)
+
+    try:
+        with open(filepath, 'w') as f:
+            json.dump(data, f, indent=2)
+            f.write('\n')
+        log_success(f"Updated {filepath}")
+        return True
+    except IOError as e:
+        log_error(f"Failed to write {filepath}: {e}")
+        return False
+
+
+def validate_plugin_arg(plugin_arg: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """
+    Validate and parse plugin@marketplace argument.
+    Returns (plugin_name, marketplace, error_message).
+    If error_message is set, the other values are None.
+    """
+    if "@" not in plugin_arg:
+        known = get_known_marketplaces()
+        error_lines = [
+            f"Invalid plugin format. Expected: plugin@marketplace",
+            f"",
+            f"You provided: {plugin_arg}",
+            f"",
+        ]
+        if known:
+            error_lines.append("Available marketplaces on your system:")
+            for m in known:
+                error_lines.append(f"  - {m}")
+            error_lines.append("")
+        error_lines.append(f"Example: ./claude-plugin-install -p {plugin_arg}@MARKETPLACE_NAME")
+        return None, None, "\n".join(error_lines)
+
+    parts = plugin_arg.split("@", 1)
+    plugin_name = parts[0].strip()
+    marketplace = parts[1].strip()
+
+    if not plugin_name:
+        return None, None, "Plugin name cannot be empty. Expected: plugin@marketplace"
+
+    if not marketplace:
+        return None, None, "Marketplace cannot be empty. Expected: plugin@marketplace"
+
+    # Check if marketplace exists
+    known = get_known_marketplaces()
+    if known and marketplace not in known:
+        similar = find_similar_names(marketplace, known)
+        error_lines = [
+            f"Marketplace '{marketplace}' not found in your Claude Code configuration.",
+            f"",
+        ]
+        if similar:
+            error_lines.append(f"Did you mean: {', '.join(similar)}?")
+            error_lines.append("")
+        error_lines.append("Available marketplaces:")
+        for m in known:
+            error_lines.append(f"  - {m}")
+        error_lines.append("")
+        error_lines.append("To add a new marketplace in Claude Code:")
+        error_lines.append(f"  /plugin marketplace add owner/{marketplace}")
+        error_lines.append("")
+        error_lines.append("If adding the marketplace also fails and needs a workaround,")
+        error_lines.append("please file a feature request: https://github.com/shibuido/claude-plugin-install/issues")
+        return None, None, "\n".join(error_lines)
+
+    return plugin_name, marketplace, None
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Fix plugin installation for Claude Code",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+EXAMPLES:
+  ./claude-plugin-install -p superpowers@superpowers-marketplace
+  ./claude-plugin-install -p superpowers@superpowers-marketplace -y
+  ./claude-plugin-install -p superpowers@superpowers-marketplace --dry-run
+  ./claude-plugin-install -p superpowers@superpowers-marketplace --scope user
+
+SCOPE OPTIONS:
+  project-local   Install for current user in this project only (default)
+                  Uses: .claude/settings.local.json
+
+  project-shared  Install for all users of this project
+                  Uses: .claude/settings.json (committed to git)
+
+  user            Install globally for current user (all projects)
+                  Uses: ~/.claude/settings.json
+
+RELATED ISSUES (please add your voice to help prioritize the fix!):
+  https://github.com/anthropics/claude-code/issues/20593
+  https://github.com/anthropics/claude-code/issues/14202
+"""
+    )
+
+    parser.add_argument(
+        "-p", "--plugin",
+        required=True,
+        metavar="PLUGIN@MARKETPLACE",
+        help="Plugin with marketplace (e.g., superpowers@superpowers-marketplace)"
+    )
+
+    parser.add_argument(
+        "-y", "--yes", "--non-interactive",
+        dest="non_interactive",
+        action="store_true",
+        help="Non-interactive mode: skip all confirmation prompts"
+    )
+
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Enable verbose/debug output"
+    )
+
+    parser.add_argument(
+        "-s", "--scope",
+        choices=["project-local", "project-shared", "user"],
+        default="project-local",
+        help="Installation scope (default: project-local)"
+    )
+
+    parser.add_argument(
+        "-n", "--dry-run",
+        action="store_true",
+        help="Show what would be done without making changes"
+    )
+
+    parser.add_argument(
+        "-d", "--project-path",
+        type=Path,
+        default=Path.cwd(),
+        help="Project path (default: current directory)"
+    )
+
+    args = parser.parse_args()
+
+    # Validate plugin@marketplace format
+    plugin_name, marketplace, error = validate_plugin_arg(args.plugin)
+    if error:
+        log_error(error)
+        return 1
+
+    plugin_key = f"{plugin_name}@{marketplace}"
+
+    # Print banner
+    print_banner(plugin_name, marketplace)
+
+    project_path = args.project_path.resolve()
+    paths = get_paths(args.scope, project_path, plugin_name, marketplace)
+
+    log_info(f"Plugin: {plugin_key}")
+    log_info(f"Project path: {project_path}")
+    log_info(f"Scope: {args.scope}")
+
+    if args.dry_run:
+        log_warn("DRY RUN MODE - No changes will be made")
+
+    # === IMPORTANT WARNING ===
+    log_step("Pre-flight checks")
+    print(color("""
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  ⚠️  IMPORTANT: Please close Claude Code in this directory before proceeding  │
+│                                                                              │
+│  This script modifies .claude/settings files. If Claude Code is running,     │
+│  there may be a race condition where your changes get overwritten.           │
+│                                                                              │
+│  To close Claude Code:                                                       │
+│    - In the Claude Code TUI, type /exit or press Ctrl+C                      │
+│    - Or close the terminal/tmux pane running Claude Code                     │
+│                                                                              │
+│  Don't worry - all files will be backed up before any modifications!         │
+└──────────────────────────────────────────────────────────────────────────────┘
+""", Colors.YELLOW))
+
+    if not ask_confirmation("Have you closed Claude Code in this directory?", args.non_interactive):
+        log_info("Please close Claude Code and run this script again.")
+        return 0
+
+    # === VERIFY ASSUMPTIONS ===
+    success, errors = verify_assumptions(paths, marketplace, plugin_name, args.verbose)
+
+    if not success:
+        log_error("Assumption verification failed!")
+        for err in errors:
+            log_error(f"  - {err}")
+        print_debug_info("Assumption verification failed", {
+            "paths": {k: str(v) for k, v in paths.items()},
+            "errors": errors,
+            "project_path": str(project_path),
+            "scope": args.scope,
+            "plugin_key": plugin_key,
+        })
+        return 1
+
+    # === CHECK IF ALREADY INSTALLED ===
+    log_step("Checking current installation status")
+
+    if check_already_installed(paths, project_path, plugin_key, args.verbose):
+        if not ask_confirmation("Plugin appears to be already installed. Continue anyway?", args.non_interactive):
+            log_info("Exiting without changes.")
+            return 0
+    else:
+        log_success("Plugin not yet installed for this project/scope")
+
+    # === SHOW WHAT WILL BE MODIFIED ===
+    log_step("Files to be modified")
+
+    files_to_modify = [
+        paths["installed_plugins"],
+        paths["settings"],
+    ]
+
+    for f in files_to_modify:
+        status = "exists" if f.exists() else "will be created"
+        print(f"  - {f} ({status})")
+
+    if args.dry_run:
+        log_info("DRY RUN: Would modify the above files")
+        return 0
+
+    if not ask_confirmation("Proceed with modifications?", args.non_interactive):
+        log_info("Exiting without changes.")
+        return 0
+
+    # === CREATE BACKUPS ===
+    log_step("Creating backups")
+
+    backups = []
+    for f in files_to_modify:
+        backup = backup_file(f, args.verbose)
+        if backup:
+            backups.append(backup)
+
+    if not backups:
+        log_info("No existing files to back up")
+
+    # === APPLY MODIFICATIONS ===
+    log_step("Applying modifications")
+
+    log_info("Updating installed_plugins.json...")
+    if not update_installed_plugins(paths, project_path, args.scope, plugin_key, args.verbose):
+        log_error("Failed to update installed_plugins.json")
+        print_debug_info("Failed to update installed_plugins.json", {
+            "paths": {k: str(v) for k, v in paths.items()},
+            "project_path": str(project_path),
+            "scope": args.scope,
+            "plugin_key": plugin_key,
+        })
+        return 1
+
+    log_info(f"Updating {paths['settings'].name}...")
+    if not update_settings(paths, plugin_key, args.verbose):
+        log_error(f"Failed to update {paths['settings']}")
+        print_debug_info("Failed to update settings", {
+            "paths": {k: str(v) for k, v in paths.items()},
+            "project_path": str(project_path),
+            "scope": args.scope,
+            "plugin_key": plugin_key,
+        })
+        return 1
+
+    # === SUCCESS ===
+    print(color("""
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  SUCCESS! Plugin installation workaround applied.                            ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+""", Colors.GREEN))
+
+    print("Next steps:")
+    print(f"  1. Start Claude Code in this directory: {color('claude', Colors.CYAN)}")
+    print(f"  2. Run {color('/plugin', Colors.CYAN)} and check the Installed tab")
+    print(f"  3. You should see: {color(f'{plugin_name} Plugin · {marketplace} · ✔ enabled', Colors.GREEN)}")
+
+    if backups:
+        print(f"\nBackups created:")
+        for b in backups:
+            print(f"  - {b}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print("\n")
+        log_info("Interrupted by user")
+        sys.exit(130)
+    except Exception as e:
+        log_error(f"Unexpected error: {e}")
+        import traceback
+        print_debug_info(f"Unexpected exception: {e}", {
+            "traceback": traceback.format_exc(),
+        })
+        sys.exit(1)

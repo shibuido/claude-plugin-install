@@ -1,29 +1,61 @@
 # claude-plugin-install
 
-A workaround tool for Claude Code plugin installation bugs.
+Fix Claude Code's plugin installation bug with one command.
 
-## Problem
+## The Problem
 
-Claude Code has a bug where plugin installation fails when a plugin with the same name exists in multiple marketplaces. For example, installing `superpowers@superpowers-marketplace` fails because `superpowers@claude-plugins-official` exists.
+Claude Code fails to install plugins when the same plugin name exists in multiple marketplaces. You get "already installed" errors even though the plugin isn't working in your project.
 
-**Tracked in:** [anthropics/claude-code#20593](https://github.com/anthropics/claude-code/issues/20593)
+**Upstream issues** (add your voice to help prioritize the fix!):
 
-## Quick Start
+* [#20593](https://github.com/anthropics/claude-code/issues/20593) - Wrong marketplace matching
+* [#14202](https://github.com/anthropics/claude-code/issues/14202) - Project scope confusion
+
+## Quick Install
 
 ```bash
 # Download
-curl -fsSL https://gist.githubusercontent.com/gwpl/cd6dcd899ca0acce1b4a1bc486d56a9e/raw/fix-selected-plugin.py -o claude-plugin-install
+curl -fsSL https://raw.githubusercontent.com/shibuido/claude-plugin-install/master/claude-plugin-install -o claude-plugin-install
 chmod +x claude-plugin-install
 
 # Close Claude Code first, then run:
-./claude-plugin-install -p PLUGIN_NAME -m MARKETPLACE_NAME
+./claude-plugin-install -p superpowers@superpowers-marketplace
 ```
 
-## Status
+Or with `uv`:
 
-**Work in Progress** - This repo is being developed into a proper CLI tool.
+```bash
+uv run https://raw.githubusercontent.com/shibuido/claude-plugin-install/master/claude-plugin-install -p superpowers@superpowers-marketplace
+```
 
-See [archival/](archival/) for the original development context and scripts.
+## Safety First
+
+* Creates timestamped backups before any changes
+* Validates assumptions before proceeding
+* Interactive confirmation (use `-y` to skip)
+* Dry-run mode available (`-n`)
+
+## Usage
+
+```bash
+./claude-plugin-install -p PLUGIN@MARKETPLACE [options]
+
+Options:
+  -p, --plugin    Required. Plugin with marketplace (e.g., superpowers@superpowers-marketplace)
+  -s, --scope     project-local (default), project-shared, or user
+  -y, --yes       Non-interactive mode
+  -n, --dry-run   Preview changes only
+  -v, --verbose   Debug output
+```
+
+## Need Help?
+
+* [Open an issue](https://github.com/shibuido/claude-plugin-install/issues) - for problems with this tool
+* [Upstream #20593](https://github.com/anthropics/claude-code/issues/20593) - add "me too" to help prioritize the bug fix
+
+## Detailed Documentation
+
+See [claude-plugin-install.README.md](claude-plugin-install.README.md) for comprehensive docs.
 
 ## License
 
