@@ -124,6 +124,26 @@ def log_verbose(msg: str, verbose: bool) -> None:
     if verbose:
         print(f"{color('[DEBUG]', Colors.MAGENTA)} {msg}")
 
+def find_similar_names(target: str, candidates: list[str], threshold: float = 0.6) -> list[str]:
+    """Find similar names using simple character-based similarity."""
+    def similarity(a: str, b: str) -> float:
+        """Simple similarity based on common characters and length."""
+        a, b = a.lower(), b.lower()
+        if a == b:
+            return 1.0
+        # Check if one contains the other
+        if a in b or b in a:
+            return 0.8
+        # Character-based similarity
+        common = sum(1 for c in a if c in b)
+        return common / max(len(a), len(b))
+
+    similar = []
+    for candidate in candidates:
+        if similarity(target, candidate) >= threshold:
+            similar.append(candidate)
+    return similar
+
 def print_banner(plugin_name: str, marketplace: str) -> None:
     """Print script banner."""
     plugin_key = f"{plugin_name}@{marketplace}"
@@ -159,7 +179,20 @@ def print_debug_info(error_context: str, locals_snapshot: dict[str, Any]) -> Non
     print("```json")
     print(json.dumps(debug_info, indent=2))
     print("```")
-    print(f"\n{color('Please report at:', Colors.YELLOW)} https://github.com/anthropics/claude-code/issues/14202")
+    print(color("""
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  WHERE TO REPORT                                                             ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║  For the UPSTREAM Claude Code bug (plugin name collision):                   ║
+║    Comment "me too" or describe your issue at:                               ║
+║    https://github.com/anthropics/claude-code/issues/14202                    ║
+║                                                                              ║
+║  For issues with THIS WORKAROUND SCRIPT:                                     ║
+║    https://github.com/shibuido/claude-plugin-install/issues                  ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+""", Colors.YELLOW))
 
 def ask_confirmation(prompt: str, non_interactive: bool) -> bool:
     """Ask user for confirmation unless in non-interactive mode."""
@@ -231,8 +264,14 @@ def verify_assumptions(paths: dict[str, Path], marketplace: str, plugin_name: st
             with open(paths["known_marketplaces"]) as f:
                 marketplaces = json.load(f)
             if marketplace not in marketplaces:
-                errors.append(f"'{marketplace}' not found in known_marketplaces.json. "
-                            f"Run: /plugin marketplace add OWNER/{marketplace}")
+                # Check for similar marketplace names (typo detection)
+                similar = find_similar_names(marketplace, list(marketplaces.keys()))
+                err_msg = f"'{marketplace}' not found in known_marketplaces.json."
+                if similar:
+                    err_msg += f" Did you mean: {', '.join(similar)}?"
+                else:
+                    err_msg += f" Run: /plugin marketplace add OWNER/{marketplace}"
+                errors.append(err_msg)
             else:
                 log_success(f"'{marketplace}' is registered")
                 log_verbose(f"  Config: {json.dumps(marketplaces[marketplace], indent=2)}", verbose)
