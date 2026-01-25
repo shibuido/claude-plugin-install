@@ -34,12 +34,13 @@
 ║    (Bug: projectPath scope issues)                                           ║
 ║                                                                              ║
 ║  USAGE:                                                                      ║
+║    ./fix-selected-plugin.py -p PLUGIN@MARKETPLACE [OPTIONS]                  ║
 ║    ./fix-selected-plugin.py -p PLUGIN -m MARKETPLACE [OPTIONS]               ║
-║    ./fix-selected-plugin.py --plugin PLUGIN --marketplace MARKETPLACE        ║
 ║                                                                              ║
 ║  EXAMPLES:                                                                   ║
+║    ./fix-selected-plugin.py -p superpowers@superpowers-marketplace           ║
 ║    ./fix-selected-plugin.py -p superpowers -m superpowers-marketplace        ║
-║    ./fix-selected-plugin.py -p my-plugin -m my-marketplace --scope user      ║
+║    ./fix-selected-plugin.py -p my-plugin@my-marketplace --scope user         ║
 ║                                                                              ║
 ║  Run from the project directory where you want to install the plugin.        ║
 ║                                                                              ║
@@ -381,8 +382,8 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 REQUIRED ARGUMENTS:
-  -p, --plugin       Plugin name (e.g., superpowers, my-plugin)
-  -m, --marketplace  Marketplace name (e.g., superpowers-marketplace)
+  -p, --plugin       Plugin name or plugin@marketplace (e.g., superpowers@superpowers-marketplace)
+  -m, --marketplace  Marketplace name (optional if using plugin@marketplace format)
 
 SCOPE OPTIONS:
   project-local   Install for current user in this project only (default)
@@ -395,20 +396,20 @@ SCOPE OPTIONS:
                   Uses: ~/.claude/settings.json
 
 EXAMPLES:
-  # Install superpowers from superpowers-marketplace
+  # Install using plugin@marketplace format (recommended)
+  ./fix-selected-plugin.py -p superpowers@superpowers-marketplace
+
+  # Install using separate flags
   ./fix-selected-plugin.py -p superpowers -m superpowers-marketplace
 
-  # Install any plugin from any marketplace
-  ./fix-selected-plugin.py -p my-plugin -m my-marketplace
-
   # Non-interactive mode for scripts
-  ./fix-selected-plugin.py -p superpowers -m superpowers-marketplace -y
+  ./fix-selected-plugin.py -p superpowers@superpowers-marketplace -y
 
   # Install globally for user
-  ./fix-selected-plugin.py -p superpowers -m superpowers-marketplace -s user
+  ./fix-selected-plugin.py -p superpowers@superpowers-marketplace -s user
 
   # Verbose output for debugging
-  ./fix-selected-plugin.py -p superpowers -m superpowers-marketplace -v
+  ./fix-selected-plugin.py -p superpowers@superpowers-marketplace -v
 
 RELATED ISSUES:
   https://github.com/anthropics/claude-code/issues/20593
@@ -419,13 +420,14 @@ RELATED ISSUES:
     parser.add_argument(
         "-p", "--plugin",
         required=True,
-        help="Plugin name (e.g., superpowers)"
+        help="Plugin name or plugin@marketplace (e.g., superpowers@superpowers-marketplace)"
     )
 
     parser.add_argument(
         "-m", "--marketplace",
-        required=True,
-        help="Marketplace name (e.g., superpowers-marketplace)"
+        required=False,
+        default=None,
+        help="Marketplace name (optional if using plugin@marketplace format)"
     )
 
     parser.add_argument(
@@ -463,8 +465,33 @@ RELATED ISSUES:
 
     args = parser.parse_args()
 
-    plugin_name = args.plugin
+    # Parse plugin@marketplace format
+    plugin_input = args.plugin
     marketplace = args.marketplace
+
+    if "@" in plugin_input:
+        # Parse plugin@marketplace format
+        parts = plugin_input.split("@", 1)
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            log_error(f"Invalid plugin format: '{plugin_input}'. Expected 'plugin@marketplace'")
+            return 1
+        plugin_name = parts[0]
+        parsed_marketplace = parts[1]
+
+        # If -m was also provided, it must match
+        if marketplace is not None and marketplace != parsed_marketplace:
+            log_error(f"Marketplace mismatch: -p contains '@{parsed_marketplace}' but -m is '{marketplace}'")
+            return 1
+        marketplace = parsed_marketplace
+    else:
+        plugin_name = plugin_input
+        # Marketplace must be provided via -m flag
+        if marketplace is None:
+            log_error("Marketplace is required. Use either:")
+            log_error(f"  -p {plugin_input}@MARKETPLACE")
+            log_error(f"  -p {plugin_input} -m MARKETPLACE")
+            return 1
+
     plugin_key = f"{plugin_name}@{marketplace}"
 
     # Print banner
