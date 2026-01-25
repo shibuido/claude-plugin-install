@@ -156,7 +156,23 @@ def print_debug_info(error_context: str, locals_snapshot: dict[str, Any]) -> Non
     print("```json")
     print(json.dumps(debug_info, indent=2))
     print("```")
-    print(f"\n{color('Please report at:', Colors.YELLOW)} https://github.com/obra/superpowers-marketplace/issues/11")
+    print(color("""
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  WHERE TO REPORT                                                             ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║  For the UPSTREAM Claude Code bug (plugin name collision):                   ║
+║    Comment "me too" or describe your issue at:                               ║
+║    https://github.com/anthropics/claude-code/issues/14202                    ║
+║                                                                              ║
+║  For superpowers plugin specific issues:                                     ║
+║    https://github.com/obra/superpowers-marketplace/issues/11                 ║
+║                                                                              ║
+║  For issues with THIS WORKAROUND SCRIPT:                                     ║
+║    https://github.com/shibuido/claude-plugin-install/issues                  ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+""", Colors.YELLOW))
 
 def ask_confirmation(prompt: str, non_interactive: bool) -> bool:
     """Ask user for confirmation unless in non-interactive mode."""
