@@ -20,19 +20,21 @@ curl -fsSL https://gist.githubusercontent.com/gwpl/cd6dcd899ca0acce1b4a1bc486d56
 chmod +x fix-selected-plugin.py
 
 # Close Claude Code first, then run:
-./fix-selected-plugin.py -p PLUGIN_NAME -m MARKETPLACE_NAME
+./fix-selected-plugin.py -p PLUGIN@MARKETPLACE
 ```
 
 ## Usage
 
 ```
+./fix-selected-plugin.py -p PLUGIN@MARKETPLACE [OPTIONS]
 ./fix-selected-plugin.py -p PLUGIN -m MARKETPLACE [OPTIONS]
 
 Required:
-  -p, --plugin        Plugin name (e.g., superpowers, my-plugin)
-  -m, --marketplace   Marketplace name (e.g., superpowers-marketplace)
+  -p, --plugin        Plugin@marketplace (e.g., superpowers@superpowers-marketplace)
+                      Or just plugin name if using -m flag
 
-Options:
+Optional:
+  -m, --marketplace   Marketplace name (not needed if using plugin@marketplace format)
   -h, --help          Show help message
   -y, --yes           Non-interactive mode (skip confirmations)
   -v, --verbose       Enable verbose/debug output
@@ -44,23 +46,23 @@ Options:
 ## Examples
 
 ```bash
-# Install superpowers from superpowers-marketplace
+# Install using plugin@marketplace format (recommended)
+./fix-selected-plugin.py -p superpowers@superpowers-marketplace
+
+# Install using separate flags (also works)
 ./fix-selected-plugin.py -p superpowers -m superpowers-marketplace
 
-# Install any plugin from any marketplace
-./fix-selected-plugin.py -p my-plugin -m my-marketplace
-
 # Non-interactive for scripts/automation
-./fix-selected-plugin.py -p superpowers -m superpowers-marketplace -y
+./fix-selected-plugin.py -p superpowers@superpowers-marketplace -y
 
 # Install globally for user (all projects)
-./fix-selected-plugin.py -p superpowers -m superpowers-marketplace -s user
+./fix-selected-plugin.py -p superpowers@superpowers-marketplace -s user
 
 # Verbose output for debugging
-./fix-selected-plugin.py -p superpowers -m superpowers-marketplace -v
+./fix-selected-plugin.py -p superpowers@superpowers-marketplace -v
 
 # Preview without making changes
-./fix-selected-plugin.py -p superpowers -m superpowers-marketplace -n
+./fix-selected-plugin.py -p superpowers@superpowers-marketplace -n
 ```
 
 ## Scope Options
