@@ -44,6 +44,9 @@ Available tests:
     test_cache_plugin_remembered - Test that plugin is remembered in cache
     test_invocation_logged     - Test that invocations are logged
     test_log_auto_trim         - Test that log auto-trims when exceeding threshold
+    test_subcommands_help      - Test that subcommands show proper help
+    test_uninstall             - Test that uninstall removes plugin from settings
+    test_scope_detection       - Test that no-args mode shows installed plugins
     test_verbosity_levels      - Test that -v/-vv/-vvv produce different output
 """
 
@@ -604,6 +607,91 @@ def test_log_auto_trim(ctx: TestContext) -> bool:
     return True
 
 
+def test_subcommands_help(ctx: TestContext) -> bool:
+    """Test that subcommands show proper help."""
+    log_test("test_subcommands_help")
+    for sub, expect in [("cache", "list"), ("log", "show"), ("uninstall", "PLUGIN@MARKETPLACE")]:
+        result = subprocess.run(
+            [sys.executable, str(ctx.script_path), sub, "--help"],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0 or expect not in result.stdout:
+            log_fail(f"'{sub} --help' should work and mention '{expect}'")
+            log_verbose(f"stdout: {result.stdout}\nstderr: {result.stderr}", ctx.verbose)
+            return False
+    log_success("subcommands have proper help")
+    return True
+
+
+def test_uninstall(ctx: TestContext) -> bool:
+    """Test that uninstall removes plugin from settings."""
+    log_test("test_uninstall")
+    # First install
+    result = subprocess.run(
+        [sys.executable, str(ctx.script_path), "-p", ctx.plugin_key,
+         "-d", str(ctx.test_dir), "-y"],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        log_fail(f"install failed: {result.returncode}")
+        log_verbose(f"stderr: {result.stderr}", ctx.verbose)
+        return False
+    settings_file = ctx.test_dir / ".claude" / "settings.local.json"
+    with open(settings_file) as f:
+        data = json.load(f)
+    if ctx.plugin_key not in data.get("enabledPlugins", {}):
+        log_fail("plugin not installed")
+        return False
+    # Now uninstall
+    result = subprocess.run(
+        [sys.executable, str(ctx.script_path), "uninstall", ctx.plugin_key,
+         "-l", "-y", "-d", str(ctx.test_dir)],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        log_fail(f"uninstall failed: {result.returncode}")
+        log_verbose(f"stderr: {result.stderr}", ctx.verbose)
+        return False
+    with open(settings_file) as f:
+        data = json.load(f)
+    if ctx.plugin_key in data.get("enabledPlugins", {}):
+        log_fail("plugin still in enabledPlugins after uninstall")
+        return False
+    log_success("uninstall works correctly")
+    return True
+
+
+def test_scope_detection(ctx: TestContext) -> bool:
+    """Test that no-args mode works and shows installed plugins."""
+    log_test("test_scope_detection")
+    # Install first
+    result = subprocess.run(
+        [sys.executable, str(ctx.script_path), "-p", ctx.plugin_key,
+         "-d", str(ctx.test_dir), "-y"],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        log_fail(f"install failed: {result.returncode}")
+        log_verbose(f"stderr: {result.stderr}", ctx.verbose)
+        return False
+    # Run without -p, pipe 'q' to stdin to quit menu
+    result = subprocess.run(
+        [sys.executable, str(ctx.script_path), "-d", str(ctx.test_dir)],
+        capture_output=True, text=True, input="q\n"
+    )
+    if result.returncode not in (0, 130):
+        log_fail(f"interactive mode crashed: {result.returncode}")
+        log_verbose(f"stderr: {result.stderr}", ctx.verbose)
+        return False
+    output = result.stdout
+    if ctx.plugin_key not in output:
+        log_fail(f"plugin {ctx.plugin_key} not shown in interactive mode")
+        log_verbose(f"output: {output}", ctx.verbose)
+        return False
+    log_success("scope detection and interactive menu work correctly")
+    return True
+
+
 def test_verbosity_levels(ctx: TestContext) -> bool:
     """Test that -v/-vv/-vvv produce different verbosity levels."""
     log_test("test_verbosity_levels")
@@ -651,6 +739,9 @@ TESTS: dict[str, Callable[[TestContext], bool]] = {
     "test_cache_plugin_remembered": test_cache_plugin_remembered,
     "test_invocation_logged": test_invocation_logged,
     "test_log_auto_trim": test_log_auto_trim,
+    "test_subcommands_help": test_subcommands_help,
+    "test_uninstall": test_uninstall,
+    "test_scope_detection": test_scope_detection,
     "test_verbosity_levels": test_verbosity_levels,
 }
 
@@ -667,6 +758,9 @@ DEFAULT_TEST_ORDER = [
     "test_cache_plugin_remembered",
     "test_invocation_logged",
     "test_log_auto_trim",
+    "test_subcommands_help",
+    "test_uninstall",
+    "test_scope_detection",
     "test_verbosity_levels",
 ]
 

@@ -4,18 +4,23 @@
 # dependencies = []
 # ///
 """
-claude-plugin-install - Fix Claude Code plugin installation bugs
+claude-plugin-install - Install, manage, and remember Claude Code plugins
 
 Workaround for Claude Code bug where plugin installation fails when a plugin
 with the same name exists in multiple marketplaces.
 
 Usage:
-    ./claude-plugin-install -p plugin@marketplace [options]
+    ./claude-plugin-install                                         # interactive menu
+    ./claude-plugin-install -p plugin@marketplace [options]         # install
+    ./claude-plugin-install uninstall plugin@marketplace [options]  # uninstall
+    ./claude-plugin-install cache list                              # list remembered plugins
+    ./claude-plugin-install log show --last 20                     # show recent invocations
 
 Examples:
     ./claude-plugin-install -p superpowers@superpowers-marketplace
     ./claude-plugin-install -p superpowers@superpowers-marketplace -y  # non-interactive
     ./claude-plugin-install -p superpowers@superpowers-marketplace -n  # dry-run
+    ./claude-plugin-install uninstall superpowers@superpowers-marketplace -l -y
 
 Upstream issues:
     https://github.com/anthropics/claude-code/issues/20593
@@ -745,84 +750,155 @@ def validate_plugin_arg(plugin_arg: str) -> tuple[Optional[str], Optional[str], 
     return plugin_name, marketplace, None
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Fix plugin installation for Claude Code",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-EXAMPLES:
-  ./claude-plugin-install -p superpowers@superpowers-marketplace
-  ./claude-plugin-install -p superpowers@superpowers-marketplace -y
-  ./claude-plugin-install -p superpowers@superpowers-marketplace --dry-run
-  ./claude-plugin-install -p superpowers@superpowers-marketplace --scope user
+class MenuHandler:
+    """Interactive menu for plugin management."""
 
-SCOPE OPTIONS:
-  project-local   Install for current user in this project only (default)
-                  Uses: .claude/settings.local.json
+    @staticmethod
+    def display_menu(repo_path: Path) -> Optional[dict]:
+        """Display interactive menu and return selection."""
+        print(f"\n{color('Plugin Manager', Colors.CYAN)} | Repo: {color(str(repo_path), Colors.BOLD)}\n")
+        installed = ScopeDetector.detect_all_installed_plugins(repo_path)
+        cached = CacheManager.list_plugins()
+        items = []
+        idx = 1
 
-  project-shared  Install for all users of this project
-                  Uses: .claude/settings.json (committed to git)
+        if installed:
+            print(color("-- Installed plugins --------------------------", Colors.GREEN))
+            for key, scopes in sorted(installed.items()):
+                scope_str = ", ".join(
+                    f"{ScopeDetector.SCOPE_SHORTCUTS.get(s, s)}" for s in scopes
+                )
+                print(f"  [{idx}] {color(key, Colors.BOLD)}  ({scope_str})")
+                items.append({"idx": idx, "key": key, "installed": True, "scopes": scopes})
+                idx += 1
+            print()
 
-  user            Install globally for current user (all projects)
-                  Uses: ~/.claude/settings.json
+        remembered = [e for e in cached if e["key"] not in installed]
+        if remembered:
+            print(color("-- Remembered plugins (used before) -----------", Colors.BLUE))
+            for entry in remembered:
+                count = entry.get("install_count", 0)
+                try:
+                    from_dt = datetime.fromisoformat(entry.get("last_used", ""))
+                    delta = datetime.now() - from_dt
+                    if delta.days == 0:
+                        ago = "today"
+                    elif delta.days == 1:
+                        ago = "1d ago"
+                    elif delta.days < 7:
+                        ago = f"{delta.days}d ago"
+                    elif delta.days < 30:
+                        ago = f"{delta.days // 7}w ago"
+                    else:
+                        ago = f"{delta.days // 30}mo ago"
+                except (ValueError, TypeError):
+                    ago = "?"
+                print(f"  [{idx}] {entry['key']}  (last: {ago}, {count} installs)")
+                items.append({"idx": idx, "key": entry["key"], "installed": False})
+                idx += 1
+            print()
 
-RELATED ISSUES (please add your voice to help prioritize the fix!):
-  https://github.com/anthropics/claude-code/issues/20593
-  https://github.com/anthropics/claude-code/issues/14202
-"""
-    )
+        if not items:
+            print("  No installed or remembered plugins.")
+            print(f"  Type a plugin@marketplace to install, or 'q' to quit.\n")
 
-    parser.add_argument(
-        "-p", "--plugin",
-        required=True,
-        metavar="PLUGIN@MARKETPLACE",
-        help="Plugin with marketplace (e.g., superpowers@superpowers-marketplace)"
-    )
+        try:
+            choice = input(f"Select [1-{max(1, idx-1)}] or type plugin@marketplace (q=quit): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
 
-    parser.add_argument(
-        "-y", "--yes", "--non-interactive",
-        dest="non_interactive",
-        action="store_true",
-        help="Non-interactive mode: skip all confirmation prompts"
-    )
+        if not choice or choice.lower() == "q":
+            return None
 
-    parser.add_argument(
-        "-v", "--verbose",
-        action="count",
-        default=0,
-        help="Increase verbosity (-v=info, -vv=debug, -vvv=trace)"
-    )
+        try:
+            num = int(choice)
+            for item in items:
+                if item["idx"] == num:
+                    return item
+            print(f"Invalid selection: {num}")
+            return None
+        except ValueError:
+            pass
 
-    parser.add_argument(
-        "-s", "--scope",
-        choices=["project-local", "project-shared", "user"],
-        default="project-local",
-        help="Installation scope (default: project-local)"
-    )
+        if "@" in choice:
+            return {"key": choice, "installed": False, "typed": True}
 
-    parser.add_argument(
-        "-n", "--dry-run",
-        action="store_true",
-        help="Show what would be done without making changes"
-    )
+        print(f"Invalid input. Use a number or plugin@marketplace format.")
+        return None
 
-    parser.add_argument(
-        "-d", "--project-path",
-        type=Path,
-        default=Path.cwd(),
-        help="Project path (default: current directory)"
-    )
+    @staticmethod
+    def handle_installed_selection(plugin_key: str, scopes: list[str], repo_path: Path) -> Optional[dict]:
+        """Handle selection of an already-installed plugin."""
+        print(f"\n{color('Selected:', Colors.BOLD)} {plugin_key}")
+        print("Currently enabled in:")
+        for i, scope in enumerate(scopes, 1):
+            shortcut = ScopeDetector.SCOPE_SHORTCUTS.get(scope, scope)
+            path_fn = ScopeDetector.SCOPE_FILES[scope]
+            print(f"  [{i}] {shortcut}  ({path_fn(repo_path)})")
+        print(f"\n  [u] Uninstall from selected scope(s)")
+        print(f"  [a] Uninstall from all")
+        print(f"  [b] Back")
+        try:
+            action = input(f"\nAction: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+        if action == "b" or not action:
+            return None
+        elif action == "a":
+            return {"action": "uninstall", "plugin_key": plugin_key, "scopes": scopes}
+        elif action == "u":
+            print("Enter scope numbers (comma-separated) to uninstall from:")
+            try:
+                picks = input("> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                return None
+            selected_scopes = []
+            for p in picks.split(","):
+                p = p.strip()
+                try:
+                    i = int(p) - 1
+                    if 0 <= i < len(scopes):
+                        selected_scopes.append(scopes[i])
+                except ValueError:
+                    pass
+            if selected_scopes:
+                return {"action": "uninstall", "plugin_key": plugin_key, "scopes": selected_scopes}
+        return None
 
-    args = parser.parse_args()
 
-    # Set module-level verbosity from argument count
-    global VERBOSITY
-    VERBOSITY = args.verbose
+def cmd_interactive_menu(args) -> int:
+    """Interactive menu when no -p plugin is provided."""
+    project_path = args.project_path.resolve()
+    selection = MenuHandler.display_menu(project_path)
+    if selection is None:
+        return 0
+    plugin_key = selection["key"]
+    if selection.get("installed"):
+        result = MenuHandler.handle_installed_selection(
+            plugin_key, selection["scopes"], project_path
+        )
+        if result and result.get("action") == "uninstall":
+            args.plugin = plugin_key
+            args.all_scopes = len(result["scopes"]) == len(ScopeDetector.SCOPE_FILES)
+            args.subcommand = "uninstall"
+            if not args.all_scopes and len(result["scopes"]) == 1:
+                args.scope_shortcut = result["scopes"][0]
+                args.scope = result["scopes"][0]
+            return cmd_uninstall(args)
+        return 0
+    else:
+        plugin_name, marketplace, error = validate_plugin_arg(plugin_key)
+        if error:
+            log_error(error)
+            return 1
+        args.plugin = plugin_key
+        return cmd_install(args)
 
-    # Ensure cache directory exists
-    ensure_cache_dir()
 
-    # Validate plugin@marketplace format
+def cmd_install(args) -> int:
+    """Install a plugin (extracted from old main)."""
     plugin_name, marketplace, error = validate_plugin_arg(args.plugin)
     if error:
         log_error(error)
@@ -834,22 +910,26 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
     print_banner(plugin_name, marketplace)
 
     project_path = args.project_path.resolve()
-    paths = get_paths(args.scope, project_path, plugin_name, marketplace)
+    scope = getattr(args, 'scope', 'project-local')
+    paths = get_paths(scope, project_path, plugin_name, marketplace)
 
     log_info(f"Plugin: {plugin_key}")
     log_info(f"Project path: {project_path}")
-    log_info(f"Scope: {args.scope}")
+    log_info(f"Scope: {scope}")
     log_debug(f"Paths: {', '.join(f'{k}={v}' for k, v in paths.items())}")
     log_trace(f"Verbosity level: {VERBOSITY}")
 
-    if args.dry_run:
+    dry_run = getattr(args, 'dry_run', False)
+    non_interactive = getattr(args, 'non_interactive', False)
+
+    if dry_run:
         log_warn("DRY RUN MODE - No changes will be made")
 
     # === IMPORTANT WARNING ===
     log_step("Pre-flight checks")
     print(color("""
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│  ⚠️  IMPORTANT: Please close Claude Code in this directory before proceeding  │
+│  IMPORTANT: Please close Claude Code in this directory before proceeding     │
 │                                                                              │
 │  This script modifies .claude/settings files. If Claude Code is running,     │
 │  there may be a race condition where your changes get overwritten.           │
@@ -862,7 +942,7 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
 └──────────────────────────────────────────────────────────────────────────────┘
 """, Colors.YELLOW))
 
-    if not ask_confirmation("Have you closed Claude Code in this directory?", args.non_interactive):
+    if not ask_confirmation("Have you closed Claude Code in this directory?", non_interactive):
         print("Please close Claude Code and run this script again.")
         return 0
 
@@ -877,7 +957,7 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
             "paths": {k: str(v) for k, v in paths.items()},
             "errors": errors,
             "project_path": str(project_path),
-            "scope": args.scope,
+            "scope": scope,
             "plugin_key": plugin_key,
         })
         return 1
@@ -886,7 +966,7 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
     log_step("Checking current installation status")
 
     if check_already_installed(paths, project_path, plugin_key):
-        if not ask_confirmation("Plugin appears to be already installed. Continue anyway?", args.non_interactive):
+        if not ask_confirmation("Plugin appears to be already installed. Continue anyway?", non_interactive):
             print("Exiting without changes.")
             return 0
     else:
@@ -904,7 +984,7 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
         status = "exists" if f.exists() else "will be created"
         print(f"  - {f} ({status})")
 
-    if args.dry_run:
+    if dry_run:
         print("DRY RUN: Would modify the above files")
         CacheManager.update_plugin(plugin_name, marketplace, success=False)
         CacheManager.update_marketplace(marketplace)
@@ -917,7 +997,7 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
         LogManager.append(log_entry)
         return 0
 
-    if not ask_confirmation("Proceed with modifications?", args.non_interactive):
+    if not ask_confirmation("Proceed with modifications?", non_interactive):
         print("Exiting without changes.")
         return 0
 
@@ -937,12 +1017,12 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
     log_step("Applying modifications")
 
     log_info("Updating installed_plugins.json...")
-    if not update_installed_plugins(paths, project_path, args.scope, plugin_key):
+    if not update_installed_plugins(paths, project_path, scope, plugin_key):
         log_error("Failed to update installed_plugins.json")
         print_debug_info("Failed to update installed_plugins.json", {
             "paths": {k: str(v) for k, v in paths.items()},
             "project_path": str(project_path),
-            "scope": args.scope,
+            "scope": scope,
             "plugin_key": plugin_key,
         })
         return 1
@@ -953,7 +1033,7 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
         print_debug_info("Failed to update settings", {
             "paths": {k: str(v) for k, v in paths.items()},
             "project_path": str(project_path),
-            "scope": args.scope,
+            "scope": scope,
             "plugin_key": plugin_key,
         })
         return 1
@@ -968,7 +1048,7 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
     print("Next steps:")
     print(f"  1. Start Claude Code in this directory: {color('claude', Colors.CYAN)}")
     print(f"  2. Run {color('/plugin', Colors.CYAN)} and check the Installed tab")
-    print(f"  3. You should see: {color(f'{plugin_name} Plugin · {marketplace} · ✔ enabled', Colors.GREEN)}")
+    print(f"  3. You should see: {color(f'{plugin_name} Plugin · {marketplace} · enabled', Colors.GREEN)}")
 
     if backups:
         print(f"\nBackups created:")
@@ -987,6 +1067,286 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
     LogManager.append(log_entry)
 
     return 0
+
+
+def cmd_uninstall(args) -> int:
+    """Uninstall a plugin from one or more scopes."""
+    plugin_arg = args.plugin
+    plugin_name, marketplace, error = validate_plugin_arg(plugin_arg)
+    if error:
+        log_error(error)
+        return 1
+    plugin_key = f"{plugin_name}@{marketplace}"
+    project_path = args.project_path.resolve()
+
+    scopes = ScopeDetector.detect_installed_scopes(plugin_key, project_path)
+    if not scopes:
+        log_warn(f"{plugin_key} is not installed in any scope for {project_path}")
+        return 0
+
+    non_interactive = getattr(args, 'non_interactive', False)
+    scope_shortcut = getattr(args, 'scope_shortcut', None)
+
+    if getattr(args, "all_scopes", False):
+        target_scopes = scopes
+    elif scope_shortcut:
+        target_scopes = [s for s in scopes if s["scope"] == scope_shortcut]
+        if not target_scopes:
+            log_warn(f"{plugin_key} is not installed in scope {scope_shortcut}")
+            return 0
+    elif non_interactive:
+        log_error("Non-interactive uninstall requires -l, -g, -r, or --all")
+        return 1
+    else:
+        # Interactive scope selection
+        print(f"\n{color('Uninstall:', Colors.BOLD)} {plugin_key}")
+        print("Found in scopes:")
+        for i, s in enumerate(scopes, 1):
+            print(f"  [{i}] {s['shortcut']}  ({s['file']})")
+        print(f"  [a] All scopes")
+        try:
+            choice = input(f"\nUninstall from (numbers/a): ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        if choice == "a":
+            target_scopes = scopes
+        else:
+            target_scopes = []
+            for c in choice.split(","):
+                c = c.strip()
+                try:
+                    i = int(c) - 1
+                    if 0 <= i < len(scopes):
+                        target_scopes.append(scopes[i])
+                except ValueError:
+                    pass
+        if not target_scopes:
+            print("No scopes selected, exiting.")
+            return 0
+
+    backup_paths = []
+    for scope_info in target_scopes:
+        settings_file = scope_info["file"]
+        log_info(f"Removing {plugin_key} from {scope_info['shortcut']} ({settings_file})")
+        backup = backup_file(settings_file)
+        if backup:
+            backup_paths.append(backup)
+        try:
+            with open(settings_file) as f:
+                data = json.load(f)
+            if plugin_key in data.get("enabledPlugins", {}):
+                del data["enabledPlugins"][plugin_key]
+                with open(settings_file, "w") as f:
+                    json.dump(data, f, indent=2)
+                    f.write("\n")
+                log_success(f"Removed from {scope_info['shortcut']}")
+            else:
+                log_warn(f"Not found in {scope_info['shortcut']} (already removed?)")
+        except (json.JSONDecodeError, IOError) as e:
+            log_error(f"Failed to update {settings_file}: {e}")
+            return 1
+
+    # Clean installed_plugins.json if no scopes remain
+    remaining = ScopeDetector.detect_installed_scopes(plugin_key, project_path)
+    if not remaining:
+        installed_plugins = Path.home() / ".claude" / "plugins" / "installed_plugins.json"
+        if installed_plugins.exists():
+            try:
+                backup = backup_file(installed_plugins)
+                if backup:
+                    backup_paths.append(backup)
+                with open(installed_plugins) as f:
+                    data = json.load(f)
+                if plugin_key in data.get("plugins", {}):
+                    entries = data["plugins"][plugin_key]
+                    entries = [e for e in entries if e.get("projectPath") != str(project_path)]
+                    if entries:
+                        data["plugins"][plugin_key] = entries
+                    else:
+                        del data["plugins"][plugin_key]
+                    with open(installed_plugins, "w") as f:
+                        json.dump(data, f, indent=2)
+                    log_success("Cleaned up installed_plugins.json")
+            except (json.JSONDecodeError, IOError) as e:
+                log_warn(f"Could not clean installed_plugins.json: {e}")
+
+    log_entry = build_invocation_entry(
+        plugin_key=plugin_key, plugin_name=plugin_name, marketplace=marketplace,
+        action="uninstall", args=args, project_path=project_path,
+        paths={"settings": str(target_scopes[0]["file"]) if target_scopes else ""},
+        backup_paths=backup_paths, success=True, error=None,
+        interactive_answers={},
+    )
+    LogManager.append(log_entry)
+    CacheManager.update_plugin(plugin_name, marketplace, success=False)
+
+    print(color(f"\nUninstalled {plugin_key}", Colors.GREEN))
+    return 0
+
+
+def cmd_cache(args) -> int:
+    """Manage plugin memory cache."""
+    action = getattr(args, "cache_action", None)
+    if action == "list":
+        entries = CacheManager.list_plugins()
+        if not entries:
+            print("No remembered plugins.")
+            return 0
+        for e in entries:
+            print(f"  {e['key']}  (installs: {e.get('install_count', 0)}, last: {e.get('last_used', '?')[:10]})")
+        return 0
+    elif action == "list-marketplaces":
+        entries = CacheManager.list_marketplaces()
+        if not entries:
+            print("No remembered marketplaces.")
+            return 0
+        for e in entries:
+            print(f"  {e['marketplace']}  (last: {e.get('last_used', '?')[:10]})")
+        return 0
+    elif action == "remove":
+        if CacheManager.remove_plugin(args.plugin):
+            log_success(f"Removed {args.plugin} from plugin memory")
+        else:
+            log_warn(f"{args.plugin} not found in plugin memory")
+        return 0
+    elif action == "clear":
+        CacheManager.clear()
+        log_success("Plugin memory cleared")
+        return 0
+    else:
+        print("Usage: claude-plugin-install cache {list|list-marketplaces|remove|clear}")
+        return 1
+
+
+def cmd_log(args) -> int:
+    """Manage invocation log."""
+    action = getattr(args, "log_action", None)
+    if action == "show":
+        entries = LogManager.show(args.last)
+        if not entries:
+            print("No invocation history.")
+            return 0
+        for e in entries:
+            ts = e.get("timestamp", "?")[:19]
+            key = e.get("plugin_key", "?")
+            act = e.get("action", "?")
+            ok = "ok" if e.get("success") else "err"
+            print(f"  {ts}  {ok} {act:10s} {key}")
+        return 0
+    elif action == "trim":
+        removed = LogManager.trim(keep_n=getattr(args, "keep", None), days=getattr(args, "days", None))
+        log_success(f"Trimmed {removed} entries from invocation log")
+        return 0
+    else:
+        print("Usage: claude-plugin-install log {show|trim}")
+        return 1
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser with subcommands."""
+    parser = argparse.ArgumentParser(
+        description="claude-plugin-install -- Install, manage, and remember Claude Code plugins",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+EXAMPLES:
+  claude-plugin-install                                         # interactive menu
+  claude-plugin-install -p superpowers@superpowers-marketplace  # install
+  claude-plugin-install -p superpowers@superpowers-marketplace -y  # non-interactive
+  claude-plugin-install uninstall superpowers@superpowers-marketplace
+  claude-plugin-install cache list
+  claude-plugin-install log show --last 20
+
+SCOPE OPTIONS:
+  project-local   Current user in this project (default). Uses: .claude/settings.local.json
+  project-shared  All users of this project. Uses: .claude/settings.json (committed)
+  user            All projects for current user. Uses: ~/.claude/settings.json
+
+RELATED ISSUES:
+  https://github.com/anthropics/claude-code/issues/20593
+  https://github.com/anthropics/claude-code/issues/14202
+"""
+    )
+
+    # Global flags
+    parser.add_argument("-v", "--verbose", action="count", default=0,
+                        help="Increase verbosity (-v=INFO, -vv=DEBUG, -vvv=TRACE)")
+    parser.add_argument("-d", "--project-path", type=Path, default=Path.cwd(),
+                        help="Project path (default: current directory)")
+
+    # Install flags (for default/no-subcommand mode)
+    parser.add_argument("-p", "--plugin", metavar="PLUGIN@MARKETPLACE",
+                        help="Plugin to install (e.g., superpowers@superpowers-marketplace)")
+    parser.add_argument("-y", "--yes", "--non-interactive", dest="non_interactive",
+                        action="store_true", help="Non-interactive mode")
+    parser.add_argument("-n", "--dry-run", action="store_true", help="Preview changes only")
+    parser.add_argument("-s", "--scope", choices=["project-local", "project-shared", "user"],
+                        default="project-local", help="Installation scope (default: project-local)")
+    parser.add_argument("-l", dest="scope_shortcut", action="store_const",
+                        const="project-local", help="Shortcut: project-local scope")
+    parser.add_argument("-g", dest="scope_shortcut", action="store_const",
+                        const="user", help="Shortcut: user/global scope")
+    parser.add_argument("-r", dest="scope_shortcut", action="store_const",
+                        const="project-shared", help="Shortcut: project-shared/repo scope")
+
+    subparsers = parser.add_subparsers(dest="subcommand")
+
+    # uninstall subcommand
+    unsub = subparsers.add_parser("uninstall", help="Uninstall a plugin")
+    unsub.add_argument("plugin", metavar="PLUGIN@MARKETPLACE", help="Plugin to uninstall")
+    unsub.add_argument("-y", "--yes", dest="non_interactive", action="store_true")
+    unsub.add_argument("-d", "--project-path", type=Path, default=Path.cwd())
+    unsub.add_argument("-v", "--verbose", action="count", default=0)
+    unsub.add_argument("-l", dest="scope_shortcut", action="store_const", const="project-local")
+    unsub.add_argument("-g", dest="scope_shortcut", action="store_const", const="user")
+    unsub.add_argument("-r", dest="scope_shortcut", action="store_const", const="project-shared")
+    unsub.add_argument("--all", dest="all_scopes", action="store_true", help="Uninstall from all scopes")
+
+    # cache subcommand
+    cachesub = subparsers.add_parser("cache", help="Manage plugin memory cache")
+    cache_sub = cachesub.add_subparsers(dest="cache_action")
+    cache_sub.add_parser("list", help="List remembered plugins")
+    cache_sub.add_parser("list-marketplaces", help="List remembered marketplaces")
+    cache_rm = cache_sub.add_parser("remove", help="Forget a plugin")
+    cache_rm.add_argument("plugin", metavar="PLUGIN@MARKETPLACE")
+    cache_sub.add_parser("clear", help="Clear all plugin memory")
+
+    # log subcommand
+    logsub = subparsers.add_parser("log", help="Manage invocation log")
+    log_sub = logsub.add_subparsers(dest="log_action")
+    log_show = log_sub.add_parser("show", help="Show recent invocations")
+    log_show.add_argument("--last", type=int, default=10, help="Number of entries")
+    log_trim = log_sub.add_parser("trim", help="Trim log entries")
+    log_trim.add_argument("--keep", type=int, help="Keep last N entries")
+    log_trim.add_argument("--days", type=int, help="Keep entries from last N days")
+
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    global VERBOSITY
+    VERBOSITY = args.verbose
+
+    # Resolve scope shortcut
+    if getattr(args, "scope_shortcut", None):
+        args.scope = args.scope_shortcut
+
+    ensure_cache_dir()
+
+    # Route to subcommand handlers
+    if args.subcommand == "uninstall":
+        return cmd_uninstall(args)
+    elif args.subcommand == "cache":
+        return cmd_cache(args)
+    elif args.subcommand == "log":
+        return cmd_log(args)
+    elif args.plugin:
+        return cmd_install(args)
+    else:
+        return cmd_interactive_menu(args)
 
 
 if __name__ == "__main__":
