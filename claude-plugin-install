@@ -150,7 +150,8 @@ class CacheManager:
         log_debug(f"Wrote {path}")
 
     @staticmethod
-    def update_plugin(plugin_name: str, marketplace: str, success: bool) -> None:
+    def update_plugin(plugin_name: str, marketplace: str, success: bool,
+                      description: Optional[str] = None, version: Optional[str] = None) -> None:
         paths = get_cache_paths()
         ensure_cache_dir()
         cache_file = paths["plugins_cache"]
@@ -165,17 +166,26 @@ class CacheManager:
                 if success:
                     entry["install_count"] = entry.get("install_count", 0) + 1
                     entry["use_count"] = entry.get("use_count", 0) + 1
+                if description is not None:
+                    entry["description"] = description
+                if version is not None:
+                    entry["version"] = version
                 found = True
                 log_debug(f"Updated plugin cache entry: {key}")
                 break
         if not found:
-            entries.append({
+            new_entry: dict[str, Any] = {
                 "plugin": plugin_name, "marketplace": marketplace, "key": key,
                 "first_seen": now, "last_used": now,
                 "use_count": 1 if success else 0,
                 "install_count": 1 if success else 0,
                 "invocation_count": 1,
-            })
+            }
+            if description is not None:
+                new_entry["description"] = description
+            if version is not None:
+                new_entry["version"] = version
+            entries.append(new_entry)
             log_debug(f"Added new plugin cache entry: {key}")
         CacheManager._write_jsonl(cache_file, entries)
 
@@ -224,6 +234,101 @@ class CacheManager:
             if path.exists():
                 path.unlink()
                 log_info(f"Removed {path}")
+
+    @staticmethod
+    def read_marketplace_json(marketplace: str) -> Optional[dict]:
+        """Read marketplace.json from the local marketplace install directory."""
+        known_mp_path = Path.home() / ".claude" / "plugins" / "known_marketplaces.json"
+        if not known_mp_path.exists():
+            return None
+        try:
+            with open(known_mp_path) as f:
+                known = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return None
+        mp_info = known.get(marketplace)
+        if not mp_info:
+            return None
+        install_loc = mp_info.get("installLocation")
+        if not install_loc:
+            return None
+        mp_json_path = Path(install_loc) / ".claude-plugin" / "marketplace.json"
+        if not mp_json_path.exists():
+            log_debug(f"Marketplace JSON not found: {mp_json_path}")
+            return None
+        try:
+            with open(mp_json_path) as f:
+                data = json.load(f)
+            log_debug(f"Read marketplace JSON: {mp_json_path}")
+            return data
+        except (json.JSONDecodeError, OSError) as e:
+            log_warn(f"Failed to read marketplace JSON: {e}")
+            return None
+
+    @staticmethod
+    def get_plugin_description(plugin_name: str, marketplace: str) -> Optional[str]:
+        """Get a plugin's description from its marketplace.json."""
+        data = CacheManager.read_marketplace_json(marketplace)
+        if not data:
+            return None
+        for p in data.get("plugins", []):
+            if p.get("name") == plugin_name:
+                return p.get("description")
+        return None
+
+    @staticmethod
+    def sync_marketplace(marketplace: str) -> int:
+        """Import all plugins from a marketplace.json into the cache. Returns count of new/updated."""
+        data = CacheManager.read_marketplace_json(marketplace)
+        if not data:
+            log_warn(f"Could not read marketplace data for '{marketplace}'")
+            return 0
+        paths = get_cache_paths()
+        ensure_cache_dir()
+        cache_file = paths["plugins_cache"]
+        entries = CacheManager._read_jsonl(cache_file)
+        existing_keys = {e.get("key") for e in entries}
+        now = datetime.now().isoformat()
+        count = 0
+        for plugin in data.get("plugins", []):
+            name = plugin.get("name")
+            if not name:
+                continue
+            key = f"{name}@{marketplace}"
+            desc = plugin.get("description")
+            ver = plugin.get("version")
+            found = False
+            for entry in entries:
+                if entry.get("key") == key:
+                    found = True
+                    updated = False
+                    if desc and entry.get("description") != desc:
+                        entry["description"] = desc
+                        updated = True
+                    if ver and entry.get("version") != ver:
+                        entry["version"] = ver
+                        updated = True
+                    if updated:
+                        count += 1
+                        log_debug(f"Updated metadata: {key}")
+                    break
+            if not found:
+                new_entry: dict[str, Any] = {
+                    "plugin": name, "marketplace": marketplace, "key": key,
+                    "first_seen": now, "last_used": now,
+                    "use_count": 0, "install_count": 0, "invocation_count": 0,
+                }
+                if desc:
+                    new_entry["description"] = desc
+                if ver:
+                    new_entry["version"] = ver
+                entries.append(new_entry)
+                count += 1
+                log_debug(f"Added from marketplace: {key}")
+        CacheManager._write_jsonl(cache_file, entries)
+        # Also update marketplace cache
+        CacheManager.update_marketplace(marketplace)
+        return count
 
 
 class LogManager:
@@ -793,7 +898,9 @@ class MenuHandler:
                         ago = f"{delta.days // 30}mo ago"
                 except (ValueError, TypeError):
                     ago = "?"
-                print(f"  [{idx}] {entry['key']}  (last: {ago}, {count} installs)")
+                desc = entry.get("description", "")
+                desc_str = f"\n         {color(desc, Colors.CYAN)}" if desc else ""
+                print(f"  [{idx}] {entry['key']}  (last: {ago}, {count} installs){desc_str}")
                 items.append({"idx": idx, "key": entry["key"], "installed": False})
                 idx += 1
             print()
@@ -986,7 +1093,9 @@ def cmd_install(args) -> int:
 
     if dry_run:
         print("DRY RUN: Would modify the above files")
-        CacheManager.update_plugin(plugin_name, marketplace, success=False)
+        desc = CacheManager.get_plugin_description(plugin_name, marketplace)
+        ver = get_plugin_version(paths)
+        CacheManager.update_plugin(plugin_name, marketplace, success=False, description=desc, version=ver)
         CacheManager.update_marketplace(marketplace)
         log_entry = build_invocation_entry(
             plugin_key=plugin_key, plugin_name=plugin_name, marketplace=marketplace,
@@ -1056,7 +1165,9 @@ def cmd_install(args) -> int:
             print(f"  - {b}")
 
     # === UPDATE CACHE & LOG ===
-    CacheManager.update_plugin(plugin_name, marketplace, success=True)
+    desc = CacheManager.get_plugin_description(plugin_name, marketplace)
+    ver = get_plugin_version(paths)
+    CacheManager.update_plugin(plugin_name, marketplace, success=True, description=desc, version=ver)
     CacheManager.update_marketplace(marketplace)
     log_entry = build_invocation_entry(
         plugin_key=plugin_key, plugin_name=plugin_name, marketplace=marketplace,
@@ -1194,7 +1305,13 @@ def cmd_cache(args) -> int:
             print("No remembered plugins.")
             return 0
         for e in entries:
-            print(f"  {e['key']}  (installs: {e.get('install_count', 0)}, last: {e.get('last_used', '?')[:10]})")
+            desc = e.get("description", "")
+            ver = e.get("version", "")
+            ver_str = f" v{ver}" if ver else ""
+            line = f"  {e['key']}{ver_str}  (installs: {e.get('install_count', 0)}, last: {e.get('last_used', '?')[:10]})"
+            print(line)
+            if desc:
+                print(f"    {color(desc, Colors.CYAN)}")
         return 0
     elif action == "list-marketplaces":
         entries = CacheManager.list_marketplaces()
@@ -1203,6 +1320,26 @@ def cmd_cache(args) -> int:
             return 0
         for e in entries:
             print(f"  {e['marketplace']}  (last: {e.get('last_used', '?')[:10]})")
+        return 0
+    elif action == "sync":
+        marketplace = getattr(args, "marketplace", None)
+        if not marketplace:
+            # Sync all known marketplaces
+            known_mp_path = Path.home() / ".claude" / "plugins" / "known_marketplaces.json"
+            if not known_mp_path.exists():
+                log_warn("No known marketplaces found")
+                return 1
+            with open(known_mp_path) as f:
+                known = json.load(f)
+            total = 0
+            for mp_name in known:
+                count = CacheManager.sync_marketplace(mp_name)
+                print(f"  {mp_name}: {count} plugins added/updated")
+                total += count
+            log_success(f"Synced {total} plugins from {len(known)} marketplace(s)")
+            return 0
+        count = CacheManager.sync_marketplace(marketplace)
+        log_success(f"Synced {count} plugins from {marketplace}")
         return 0
     elif action == "remove":
         if CacheManager.remove_plugin(args.plugin):
@@ -1215,7 +1352,7 @@ def cmd_cache(args) -> int:
         log_success("Plugin memory cleared")
         return 0
     else:
-        print("Usage: claude-plugin-install cache {list|list-marketplaces|remove|clear}")
+        print("Usage: claude-plugin-install cache {list|list-marketplaces|sync|remove|clear}")
         return 1
 
 
@@ -1307,6 +1444,9 @@ RELATED ISSUES:
     cache_sub = cachesub.add_subparsers(dest="cache_action")
     cache_sub.add_parser("list", help="List remembered plugins")
     cache_sub.add_parser("list-marketplaces", help="List remembered marketplaces")
+    cache_sync = cache_sub.add_parser("sync", help="Import plugins from marketplace(s) into cache")
+    cache_sync.add_argument("marketplace", nargs="?", default=None,
+                            help="Marketplace to sync (default: all known marketplaces)")
     cache_rm = cache_sub.add_parser("remove", help="Forget a plugin")
     cache_rm.add_argument("plugin", metavar="PLUGIN@MARKETPLACE")
     cache_sub.add_parser("clear", help="Clear all plugin memory")

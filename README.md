@@ -60,6 +60,20 @@ TIP: claude-plugin-install is not on your PATH.
 
 Every plugin you install is remembered automatically. Next time you run the tool, your plugins appear in an interactive menu -- no need to type the full `plugin@marketplace` string again.
 
+### Marketplace Sync
+
+Import all available plugins (with descriptions and versions) from your installed marketplaces:
+
+```bash
+# Sync all known marketplaces
+./claude-plugin-install cache sync
+
+# Sync a specific marketplace
+./claude-plugin-install cache sync superpowers-marketplace
+```
+
+After syncing, `cache list` and the interactive menu show plugin descriptions.
+
 Cache files live in `~/.cache/shibuido/claude-plugin-install/` (respects `XDG_CACHE_HOME`).
 
 ## Interactive Mode
@@ -99,6 +113,7 @@ The menu shows installed plugins (with their scopes) and remembered plugins from
 ./claude-plugin-install -p PLUGIN@MARKETPLACE [options]         # install
 ./claude-plugin-install uninstall PLUGIN@MARKETPLACE [options]  # uninstall
 ./claude-plugin-install cache list                              # list remembered plugins
+./claude-plugin-install cache sync                              # import from marketplaces
 ./claude-plugin-install log show --last 20                      # show recent invocations
 
 Options:
@@ -114,7 +129,7 @@ Options:
 
 Subcommands:
   uninstall       Remove a plugin from one or more scopes
-  cache           Manage plugin memory (list, remove, clear)
+  cache           Manage plugin memory (list, sync, remove, clear)
   log             View and trim invocation history (show, trim)
 ```
 
