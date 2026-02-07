@@ -40,6 +40,7 @@ Available tests:
     test_backup_created        - Verify backup files created
     test_claude_verify         - Verify plugin in Claude Code TUI (experimental)
     test_idempotent            - Test running twice doesn't break
+    test_verbosity_levels      - Test that -v/-vv/-vvv produce different output
 """
 
 import argparse
@@ -459,6 +460,36 @@ def test_idempotent(ctx: TestContext) -> bool:
     return True
 
 
+def test_verbosity_levels(ctx: TestContext) -> bool:
+    """Test that -v/-vv/-vvv produce different verbosity levels."""
+    log_test("test_verbosity_levels")
+
+    # Test -v produces INFO: on stderr
+    result = subprocess.run(
+        [sys.executable, str(ctx.script_path), "-p", ctx.plugin_key,
+         "-d", str(ctx.test_dir), "-v", "--dry-run", "-y"],
+        capture_output=True, text=True
+    )
+    if "INFO:" not in result.stderr:
+        log_fail("-v should produce INFO: on stderr")
+        log_verbose(f"stderr: {result.stderr}", ctx.verbose)
+        return False
+
+    # Test -vvv produces TRACE: on stderr
+    result = subprocess.run(
+        [sys.executable, str(ctx.script_path), "-p", ctx.plugin_key,
+         "-d", str(ctx.test_dir), "-vvv", "--dry-run", "-y"],
+        capture_output=True, text=True
+    )
+    if "TRACE:" not in result.stderr:
+        log_fail("-vvv should produce TRACE: on stderr")
+        log_verbose(f"stderr: {result.stderr}", ctx.verbose)
+        return False
+
+    log_success("verbosity levels work correctly")
+    return True
+
+
 # ============================================================================
 # TEST REGISTRY
 # ============================================================================
@@ -472,6 +503,7 @@ TESTS: dict[str, Callable[[TestContext], bool]] = {
     "test_backup_created": test_backup_created,
     "test_claude_verify": test_claude_verify,
     "test_idempotent": test_idempotent,
+    "test_verbosity_levels": test_verbosity_levels,
 }
 
 DEFAULT_TEST_ORDER = [
@@ -483,6 +515,7 @@ DEFAULT_TEST_ORDER = [
     "test_backup_created",
     "test_claude_verify",
     "test_idempotent",
+    "test_verbosity_levels",
 ]
 
 

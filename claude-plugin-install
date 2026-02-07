@@ -43,12 +43,30 @@ class Colors:
     CYAN = "\033[96m"
 
 
+# Module-level verbosity: 0=quiet, 1=info(-v), 2=debug(-vv), 3=trace(-vvv)
+VERBOSITY = 0
+
+
 def color(text: str, c: str) -> str:
     return f"{c}{text}{Colors.RESET}"
 
 
 def log_info(msg: str) -> None:
-    print(f"{color('[INFO]', Colors.BLUE)} {msg}")
+    """Shown at -v (VERBOSITY >= 1). Printed to stderr."""
+    if VERBOSITY >= 1:
+        print(f"{color('INFO:', Colors.BLUE)} {msg}", file=sys.stderr)
+
+
+def log_debug(msg: str) -> None:
+    """Shown at -vv (VERBOSITY >= 2). Printed to stderr."""
+    if VERBOSITY >= 2:
+        print(f"{color('DEBUG:', Colors.MAGENTA)} {msg}", file=sys.stderr)
+
+
+def log_trace(msg: str) -> None:
+    """Shown at -vvv (VERBOSITY >= 3). Printed to stderr."""
+    if VERBOSITY >= 3:
+        print(f"{color('TRACE:', Colors.CYAN)} {msg}", file=sys.stderr)
 
 
 def log_success(msg: str) -> None:
@@ -56,20 +74,15 @@ def log_success(msg: str) -> None:
 
 
 def log_warn(msg: str) -> None:
-    print(f"{color('[WARN]', Colors.YELLOW)} {msg}")
+    print(f"{color('WARNING:', Colors.YELLOW)} {msg}", file=sys.stderr)
 
 
 def log_error(msg: str) -> None:
-    print(f"{color('[ERROR]', Colors.RED)} {msg}", file=sys.stderr)
+    print(f"{color('ERROR:', Colors.RED)} {msg}", file=sys.stderr)
 
 
 def log_step(msg: str) -> None:
     print(f"\n{color('▶', Colors.CYAN)} {color(msg, Colors.BOLD)}")
-
-
-def log_verbose(msg: str, verbose: bool) -> None:
-    if verbose:
-        print(f"{color('[DEBUG]', Colors.MAGENTA)} {msg}")
 
 
 def get_known_marketplaces() -> list[str]:
@@ -157,19 +170,22 @@ def ask_confirmation(prompt: str, non_interactive: bool) -> bool:
     if non_interactive:
         log_info(f"Non-interactive mode: auto-confirming '{prompt}'")
         return True
-    response = input(f"\n{color('?', Colors.YELLOW)} {prompt} [y/N]: ").strip().lower()
+    try:
+        response = input(f"\n{color('?', Colors.YELLOW)} {prompt} [y/N]: ").strip().lower()
+    except EOFError:
+        return False
     return response in ('y', 'yes')
 
 
-def backup_file(filepath: Path, verbose: bool) -> Optional[Path]:
+def backup_file(filepath: Path) -> Optional[Path]:
     if not filepath.exists():
-        log_verbose(f"File does not exist, no backup needed: {filepath}", verbose)
+        log_debug(f"File does not exist, no backup needed: {filepath}")
         return None
 
     timestamp = datetime.now().strftime("%Y-%m-%d--%H-%M-%S")
     backup_path = filepath.with_suffix(f"{filepath.suffix}.bak.{timestamp}")
 
-    log_verbose(f"Creating backup: {filepath} -> {backup_path}", verbose)
+    log_debug(f"Creating backup: {filepath} -> {backup_path}")
     shutil.copy2(filepath, backup_path)
     log_success(f"Backed up: {backup_path}")
     return backup_path
@@ -197,7 +213,7 @@ def get_paths(scope: str, project_path: Path, plugin_name: str, marketplace: str
     return paths
 
 
-def verify_assumptions(paths: dict[str, Path], marketplace: str, plugin_name: str, verbose: bool) -> tuple[bool, list[str]]:
+def verify_assumptions(paths: dict[str, Path], marketplace: str, plugin_name: str) -> tuple[bool, list[str]]:
     errors = []
 
     log_step("Verifying assumptions...")
@@ -206,7 +222,7 @@ def verify_assumptions(paths: dict[str, Path], marketplace: str, plugin_name: st
         errors.append(f"installed_plugins.json not found at: {paths['installed_plugins']}")
     else:
         log_success(f"Found installed_plugins.json")
-        log_verbose(f"  Path: {paths['installed_plugins']}", verbose)
+        log_debug(f"  Path: {paths['installed_plugins']}")
 
     if not paths["known_marketplaces"].exists():
         errors.append(f"known_marketplaces.json not found at: {paths['known_marketplaces']}")
@@ -226,7 +242,7 @@ def verify_assumptions(paths: dict[str, Path], marketplace: str, plugin_name: st
                 errors.append(err_msg)
             else:
                 log_success(f"'{marketplace}' is registered")
-                log_verbose(f"  Config: {json.dumps(marketplaces[marketplace], indent=2)}", verbose)
+                log_trace(f"  Config: {json.dumps(marketplaces[marketplace], indent=2)}")
         except json.JSONDecodeError as e:
             errors.append(f"Invalid JSON in known_marketplaces.json: {e}")
 
@@ -237,7 +253,7 @@ def verify_assumptions(paths: dict[str, Path], marketplace: str, plugin_name: st
         log_success(f"Found plugin cache for '{plugin_name}'")
         versions = list(paths["plugin_cache"].iterdir())
         if versions:
-            log_verbose(f"  Available versions: {[v.name for v in versions]}", verbose)
+            log_debug(f"  Available versions: {[v.name for v in versions]}")
 
     return (len(errors) == 0, errors)
 
@@ -253,7 +269,7 @@ def get_plugin_version(paths: dict[str, Path]) -> Optional[str]:
     return None
 
 
-def check_already_installed(paths: dict[str, Path], project_path: Path, plugin_key: str, verbose: bool) -> bool:
+def check_already_installed(paths: dict[str, Path], project_path: Path, plugin_key: str) -> bool:
     if not paths["installed_plugins"].exists():
         return False
 
@@ -277,12 +293,12 @@ def check_already_installed(paths: dict[str, Path], project_path: Path, plugin_k
 
         return False
     except (json.JSONDecodeError, KeyError) as e:
-        log_verbose(f"Error checking installation: {e}", verbose)
+        log_debug(f"Error checking installation: {e}")
         return False
 
 
 def update_installed_plugins(paths: dict[str, Path], project_path: Path, scope: str,
-                            plugin_key: str, verbose: bool) -> bool:
+                            plugin_key: str) -> bool:
     filepath = paths["installed_plugins"]
 
     try:
@@ -316,7 +332,7 @@ def update_installed_plugins(paths: dict[str, Path], project_path: Path, scope: 
 
     data["plugins"][plugin_key].append(new_entry)
 
-    log_verbose(f"New entry: {json.dumps(new_entry, indent=2)}", verbose)
+    log_trace(f"New entry: {json.dumps(new_entry, indent=2)}")
 
     try:
         with open(filepath, 'w') as f:
@@ -328,7 +344,7 @@ def update_installed_plugins(paths: dict[str, Path], project_path: Path, scope: 
         return False
 
 
-def update_settings(paths: dict[str, Path], plugin_key: str, verbose: bool) -> bool:
+def update_settings(paths: dict[str, Path], plugin_key: str) -> bool:
     filepath = paths["settings"]
 
     if filepath.exists():
@@ -347,7 +363,7 @@ def update_settings(paths: dict[str, Path], plugin_key: str, verbose: bool) -> b
 
     data["enabledPlugins"][plugin_key] = True
 
-    log_verbose(f"Settings will be: {json.dumps(data, indent=2)}", verbose)
+    log_trace(f"Settings will be: {json.dumps(data, indent=2)}")
 
     try:
         with open(filepath, 'w') as f:
@@ -460,8 +476,9 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
 
     parser.add_argument(
         "-v", "--verbose",
-        action="store_true",
-        help="Enable verbose/debug output"
+        action="count",
+        default=0,
+        help="Increase verbosity (-v=info, -vv=debug, -vvv=trace)"
     )
 
     parser.add_argument(
@@ -486,6 +503,10 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
 
     args = parser.parse_args()
 
+    # Set module-level verbosity from argument count
+    global VERBOSITY
+    VERBOSITY = args.verbose
+
     # Validate plugin@marketplace format
     plugin_name, marketplace, error = validate_plugin_arg(args.plugin)
     if error:
@@ -503,6 +524,8 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
     log_info(f"Plugin: {plugin_key}")
     log_info(f"Project path: {project_path}")
     log_info(f"Scope: {args.scope}")
+    log_debug(f"Paths: {', '.join(f'{k}={v}' for k, v in paths.items())}")
+    log_trace(f"Verbosity level: {VERBOSITY}")
 
     if args.dry_run:
         log_warn("DRY RUN MODE - No changes will be made")
@@ -525,11 +548,11 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
 """, Colors.YELLOW))
 
     if not ask_confirmation("Have you closed Claude Code in this directory?", args.non_interactive):
-        log_info("Please close Claude Code and run this script again.")
+        print("Please close Claude Code and run this script again.")
         return 0
 
     # === VERIFY ASSUMPTIONS ===
-    success, errors = verify_assumptions(paths, marketplace, plugin_name, args.verbose)
+    success, errors = verify_assumptions(paths, marketplace, plugin_name)
 
     if not success:
         log_error("Assumption verification failed!")
@@ -547,9 +570,9 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
     # === CHECK IF ALREADY INSTALLED ===
     log_step("Checking current installation status")
 
-    if check_already_installed(paths, project_path, plugin_key, args.verbose):
+    if check_already_installed(paths, project_path, plugin_key):
         if not ask_confirmation("Plugin appears to be already installed. Continue anyway?", args.non_interactive):
-            log_info("Exiting without changes.")
+            print("Exiting without changes.")
             return 0
     else:
         log_success("Plugin not yet installed for this project/scope")
@@ -567,11 +590,11 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
         print(f"  - {f} ({status})")
 
     if args.dry_run:
-        log_info("DRY RUN: Would modify the above files")
+        print("DRY RUN: Would modify the above files")
         return 0
 
     if not ask_confirmation("Proceed with modifications?", args.non_interactive):
-        log_info("Exiting without changes.")
+        print("Exiting without changes.")
         return 0
 
     # === CREATE BACKUPS ===
@@ -579,7 +602,7 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
 
     backups = []
     for f in files_to_modify:
-        backup = backup_file(f, args.verbose)
+        backup = backup_file(f)
         if backup:
             backups.append(backup)
 
@@ -590,7 +613,7 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
     log_step("Applying modifications")
 
     log_info("Updating installed_plugins.json...")
-    if not update_installed_plugins(paths, project_path, args.scope, plugin_key, args.verbose):
+    if not update_installed_plugins(paths, project_path, args.scope, plugin_key):
         log_error("Failed to update installed_plugins.json")
         print_debug_info("Failed to update installed_plugins.json", {
             "paths": {k: str(v) for k, v in paths.items()},
@@ -601,7 +624,7 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
         return 1
 
     log_info(f"Updating {paths['settings'].name}...")
-    if not update_settings(paths, plugin_key, args.verbose):
+    if not update_settings(paths, plugin_key):
         log_error(f"Failed to update {paths['settings']}")
         print_debug_info("Failed to update settings", {
             "paths": {k: str(v) for k, v in paths.items()},
@@ -635,8 +658,7 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except KeyboardInterrupt:
-        print("\n")
-        log_info("Interrupted by user")
+        print("\nInterrupted by user")
         sys.exit(130)
     except Exception as e:
         log_error(f"Unexpected error: {e}")
