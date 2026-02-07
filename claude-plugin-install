@@ -1376,7 +1376,7 @@ def main() -> int:
         args.scope = args.scope_shortcut
 
     # Check if tool is on PATH (only for interactive use)
-    if sys.stdin.isatty() and not args.yes:
+    if sys.stdin.isatty() and not getattr(args, "non_interactive", False):
         check_on_path()
 
     ensure_cache_dir()
