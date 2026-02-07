@@ -41,8 +41,10 @@ Tests are numbered and ordered from simplest to most complex:
 | 09-10 | Subcommands | Cache operations, log operations |
 | 11 | Diagnostics | Verbosity levels |
 | 12 | Full workflow | Complete user story (install -> cache -> uninstall -> memory) |
+| 13 | Marketplace sync | Cache sync imports plugins with descriptions from marketplace.json |
+| 14-15 | Interactive (tmux) | Interactive menu display/quit, interactive install confirmation |
 
-**Non-interactive tests come first**, interactive (tmux-based) tests follow.
+**Non-interactive tests come first** (01-13), interactive (tmux-based) tests follow (14+).
 
 ## Running Tests
 
