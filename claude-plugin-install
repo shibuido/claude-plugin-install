@@ -1323,6 +1323,47 @@ RELATED ISSUES:
     return parser
 
 
+def check_on_path() -> None:
+    """Check if the tool is available on PATH. If not, offer to install it."""
+    if shutil.which("claude-plugin-install"):
+        return
+    script_path = Path(__file__).resolve()
+    # Common user-local bin directories
+    candidates = [
+        Path.home() / ".local" / "bin",
+        Path.home() / "bin",
+    ]
+    target_dir = None
+    for d in candidates:
+        if d.exists() and str(d) in os.environ.get("PATH", ""):
+            target_dir = d
+            break
+    if target_dir is None:
+        target_dir = candidates[0]  # default to ~/.local/bin
+    link_path = target_dir / "claude-plugin-install"
+    print(f"\n{color('TIP:', Colors.YELLOW)} claude-plugin-install is not on your PATH.", file=sys.stderr)
+    print(f"  To make it available everywhere, run:", file=sys.stderr)
+    print(f"    mkdir -p {target_dir} && ln -sf {script_path} {link_path}", file=sys.stderr)
+    if str(target_dir) not in os.environ.get("PATH", ""):
+        print(f"    export PATH=\"{target_dir}:$PATH\"  # add to ~/.bashrc or ~/.zshrc", file=sys.stderr)
+    try:
+        answer = input(f"\n  Install now? [Y/n] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print(file=sys.stderr)
+        return
+    if answer in ("", "y", "yes"):
+        target_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            link_path.unlink(missing_ok=True)
+            link_path.symlink_to(script_path)
+            print(f"  {color('Done!', Colors.GREEN)} Symlinked {link_path} -> {script_path}", file=sys.stderr)
+            if str(target_dir) not in os.environ.get("PATH", ""):
+                print(f"  {color('Note:', Colors.YELLOW)} Add {target_dir} to your PATH to use it.", file=sys.stderr)
+        except OSError as e:
+            print(f"  {color('ERROR:', Colors.RED)} Failed to create symlink: {e}", file=sys.stderr)
+    print(file=sys.stderr)
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -1333,6 +1374,10 @@ def main() -> int:
     # Resolve scope shortcut
     if getattr(args, "scope_shortcut", None):
         args.scope = args.scope_shortcut
+
+    # Check if tool is on PATH (only for interactive use)
+    if sys.stdin.isatty() and not args.yes:
+        check_on_path()
 
     ensure_cache_dir()
 

@@ -11,21 +11,49 @@ Claude Code fails to install plugins when the same plugin name exists in multipl
 * [#20593](https://github.com/anthropics/claude-code/issues/20593) - Wrong marketplace matching
 * [#14202](https://github.com/anthropics/claude-code/issues/14202) - Project scope confusion
 
-## Quick Install
+## Installation
+
+### One-liner (download and run)
 
 ```bash
-# Download
 curl -fsSL https://raw.githubusercontent.com/shibuido/claude-plugin-install/master/claude-plugin-install -o claude-plugin-install
 chmod +x claude-plugin-install
-
-# Close Claude Code first, then run:
 ./claude-plugin-install -p superpowers@superpowers-marketplace
 ```
 
-Or with `uv`:
+The tool will detect it's not on your PATH and offer to install itself automatically.
+
+### With uv (no download needed)
 
 ```bash
 uv run https://raw.githubusercontent.com/shibuido/claude-plugin-install/master/claude-plugin-install -p superpowers@superpowers-marketplace
+```
+
+### Permanent install (symlink to PATH)
+
+```bash
+# Clone the repo
+git clone https://github.com/shibuido/claude-plugin-install.git
+cd claude-plugin-install
+
+# Symlink to ~/.local/bin (or any directory on your PATH)
+mkdir -p ~/.local/bin
+ln -sf "$(pwd)/claude-plugin-install" ~/.local/bin/claude-plugin-install
+
+# Now available everywhere:
+claude-plugin-install -p superpowers@superpowers-marketplace
+```
+
+### Self-install prompt
+
+When run interactively, the tool checks if `claude-plugin-install` is available on your PATH. If not, it shows a one-liner to install and offers to do it for you:
+
+```
+TIP: claude-plugin-install is not on your PATH.
+  To make it available everywhere, run:
+    mkdir -p ~/.local/bin && ln -sf /path/to/claude-plugin-install ~/.local/bin/claude-plugin-install
+
+  Install now? [Y/n]
 ```
 
 ## Plugin Memory
