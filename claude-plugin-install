@@ -85,6 +85,318 @@ def log_step(msg: str) -> None:
     print(f"\n{color('▶', Colors.CYAN)} {color(msg, Colors.BOLD)}")
 
 
+# === Constants & Paths ===
+VERSION = "0.2.0"
+LOG_MIN_ENTRIES = 1000
+
+
+def get_cache_dir() -> Path:
+    """Get cache directory, respecting XDG_CACHE_HOME."""
+    base = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
+    return base / "shibuido" / "claude-plugin-install"
+
+
+def get_cache_paths() -> dict[str, Path]:
+    """Get all cache file paths."""
+    cache_dir = get_cache_dir()
+    return {
+        "cache_dir": cache_dir,
+        "plugins_cache": cache_dir / "plugins-cache.jsonl",
+        "marketplace_cache": cache_dir / "marketplace-cache.jsonl",
+        "invocations_log": cache_dir / "invocations.jsonl",
+    }
+
+
+def ensure_cache_dir() -> Path:
+    """Create cache directory if it doesn't exist. Returns the path."""
+    cache_dir = get_cache_dir()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    log_trace(f"Cache directory: {cache_dir}")
+    return cache_dir
+
+
+class CacheManager:
+    """Stateless manager for plugins-cache.jsonl and marketplace-cache.jsonl."""
+
+    @staticmethod
+    def _read_jsonl(path: Path) -> list[dict]:
+        if not path.exists():
+            return []
+        entries = []
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        log_warn(f"Skipping invalid JSON line in {path}")
+        log_trace(f"Read {len(entries)} entries from {path}")
+        return entries
+
+    @staticmethod
+    def _write_jsonl(path: Path, entries: list[dict]) -> None:
+        log_trace(f"Writing {len(entries)} entries to {path}")
+        tmp_path = path.with_suffix(".tmp")
+        with open(tmp_path, "w") as f:
+            for entry in entries:
+                f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+        os.replace(tmp_path, path)
+        log_debug(f"Wrote {path}")
+
+    @staticmethod
+    def update_plugin(plugin_name: str, marketplace: str, success: bool) -> None:
+        paths = get_cache_paths()
+        ensure_cache_dir()
+        cache_file = paths["plugins_cache"]
+        key = f"{plugin_name}@{marketplace}"
+        now = datetime.now().isoformat()
+        entries = CacheManager._read_jsonl(cache_file)
+        found = False
+        for entry in entries:
+            if entry.get("key") == key:
+                entry["last_used"] = now
+                entry["invocation_count"] = entry.get("invocation_count", 0) + 1
+                if success:
+                    entry["install_count"] = entry.get("install_count", 0) + 1
+                    entry["use_count"] = entry.get("use_count", 0) + 1
+                found = True
+                log_debug(f"Updated plugin cache entry: {key}")
+                break
+        if not found:
+            entries.append({
+                "plugin": plugin_name, "marketplace": marketplace, "key": key,
+                "first_seen": now, "last_used": now,
+                "use_count": 1 if success else 0,
+                "install_count": 1 if success else 0,
+                "invocation_count": 1,
+            })
+            log_debug(f"Added new plugin cache entry: {key}")
+        CacheManager._write_jsonl(cache_file, entries)
+
+    @staticmethod
+    def update_marketplace(marketplace: str) -> None:
+        paths = get_cache_paths()
+        ensure_cache_dir()
+        cache_file = paths["marketplace_cache"]
+        now = datetime.now().isoformat()
+        entries = CacheManager._read_jsonl(cache_file)
+        found = False
+        for entry in entries:
+            if entry.get("marketplace") == marketplace:
+                entry["last_used"] = now
+                found = True
+                break
+        if not found:
+            entries.append({"marketplace": marketplace, "first_seen": now, "last_used": now})
+        CacheManager._write_jsonl(cache_file, entries)
+
+    @staticmethod
+    def list_plugins() -> list[dict]:
+        return CacheManager._read_jsonl(get_cache_paths()["plugins_cache"])
+
+    @staticmethod
+    def list_marketplaces() -> list[dict]:
+        return CacheManager._read_jsonl(get_cache_paths()["marketplace_cache"])
+
+    @staticmethod
+    def remove_plugin(key: str) -> bool:
+        paths = get_cache_paths()
+        cache_file = paths["plugins_cache"]
+        entries = CacheManager._read_jsonl(cache_file)
+        before = len(entries)
+        entries = [e for e in entries if e.get("key") != key]
+        if len(entries) < before:
+            CacheManager._write_jsonl(cache_file, entries)
+            return True
+        return False
+
+    @staticmethod
+    def clear() -> None:
+        paths = get_cache_paths()
+        for key in ("plugins_cache", "marketplace_cache"):
+            path = paths[key]
+            if path.exists():
+                path.unlink()
+                log_info(f"Removed {path}")
+
+
+class LogManager:
+    """Stateless manager for invocations.jsonl with auto-trim."""
+
+    @staticmethod
+    def append(entry: dict) -> None:
+        paths = get_cache_paths()
+        ensure_cache_dir()
+        log_file = paths["invocations_log"]
+        line = json.dumps(entry, separators=(",", ":")) + "\n"
+        with open(log_file, "a") as f:
+            f.write(line)
+        log_debug(f"Logged invocation: action={entry.get('action')}")
+        LogManager._auto_trim(log_file)
+
+    @staticmethod
+    def _auto_trim(log_file: Path) -> None:
+        try:
+            with open(log_file) as f:
+                lines = f.readlines()
+        except FileNotFoundError:
+            return
+        if len(lines) <= LOG_MIN_ENTRIES * 2:
+            log_trace(f"Log has {len(lines)} lines, no trim needed (threshold: {LOG_MIN_ENTRIES * 2})")
+            return
+        log_info(f"Auto-trimming log from {len(lines)} to {LOG_MIN_ENTRIES} entries")
+        keep = lines[-LOG_MIN_ENTRIES:]
+        tmp_path = log_file.with_suffix(".tmp")
+        with open(tmp_path, "w") as f:
+            f.writelines(keep)
+        os.replace(tmp_path, log_file)
+
+    @staticmethod
+    def show(last_n: int = 10) -> list[dict]:
+        paths = get_cache_paths()
+        log_file = paths["invocations_log"]
+        if not log_file.exists():
+            return []
+        entries = []
+        with open(log_file) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+        return entries[-last_n:]
+
+    @staticmethod
+    def trim(keep_n: Optional[int] = None, days: Optional[int] = None) -> int:
+        paths = get_cache_paths()
+        log_file = paths["invocations_log"]
+        if not log_file.exists():
+            return 0
+        with open(log_file) as f:
+            lines = f.readlines()
+        original_count = len(lines)
+        if days is not None:
+            cutoff = datetime.now().timestamp() - (days * 86400)
+            kept = []
+            for line in lines:
+                line_s = line.strip()
+                if not line_s:
+                    continue
+                try:
+                    entry = json.loads(line_s)
+                    ts = datetime.fromisoformat(entry["timestamp"]).timestamp()
+                    if ts >= cutoff:
+                        kept.append(line)
+                except (json.JSONDecodeError, KeyError, ValueError):
+                    kept.append(line)
+            if keep_n is None and len(kept) < LOG_MIN_ENTRIES:
+                kept = lines[-LOG_MIN_ENTRIES:] if len(lines) >= LOG_MIN_ENTRIES else lines
+            lines = kept
+        if keep_n is not None:
+            lines = lines[-keep_n:] if len(lines) > keep_n else lines
+        tmp_path = log_file.with_suffix(".tmp")
+        with open(tmp_path, "w") as f:
+            f.writelines(lines)
+        os.replace(tmp_path, log_file)
+        return original_count - len(lines)
+
+
+def build_invocation_entry(
+    plugin_key: str, plugin_name: str, marketplace: str, action: str,
+    args: argparse.Namespace, project_path: Path, paths: dict,
+    backup_paths: list, success: bool, error: Optional[str],
+    interactive_answers: dict
+) -> dict:
+    settings_file = str(paths.get("settings", ""))
+    backup_path = str(backup_paths[-1]) if backup_paths else ""
+    def resolve(p: str) -> str:
+        try:
+            return str(Path(p).resolve()) if p else ""
+        except (OSError, ValueError):
+            return p
+    return {
+        "timestamp": datetime.now().isoformat(),
+        "plugin_key": plugin_key,
+        "plugin": plugin_name,
+        "marketplace": marketplace,
+        "action": action,
+        "repo_git_root": str(project_path),
+        "repo_git_root_resolved": resolve(str(project_path)),
+        "settings_file": settings_file,
+        "settings_file_resolved": resolve(settings_file),
+        "backup_path": backup_path,
+        "backup_path_resolved": resolve(backup_path),
+        "scope": getattr(args, 'scope', 'project-local'),
+        "argv": sys.argv,
+        "dry_run": getattr(args, 'dry_run', False),
+        "interactive_answers": interactive_answers,
+        "success": success,
+        "error": error,
+        "version": VERSION,
+    }
+
+
+class ScopeDetector:
+    """Detect which scopes have a plugin installed."""
+
+    SCOPE_FILES = {
+        "project-local": lambda repo: repo / ".claude" / "settings.local.json",
+        "project-shared": lambda repo: repo / ".claude" / "settings.json",
+        "user": lambda _: Path.home() / ".claude" / "settings.json",
+    }
+
+    SCOPE_SHORTCUTS = {
+        "project-local": "local",
+        "project-shared": "shared",
+        "user": "global",
+    }
+
+    @staticmethod
+    def detect_installed_scopes(plugin_key: str, repo_path: Path) -> list[dict]:
+        results = []
+        for scope, path_fn in ScopeDetector.SCOPE_FILES.items():
+            settings_file = path_fn(repo_path)
+            if not settings_file.exists():
+                log_trace(f"Scope {scope}: file not found ({settings_file})")
+                continue
+            try:
+                with open(settings_file) as f:
+                    data = json.load(f)
+                if data.get("enabledPlugins", {}).get(plugin_key):
+                    results.append({
+                        "scope": scope, "file": settings_file,
+                        "shortcut": ScopeDetector.SCOPE_SHORTCUTS[scope],
+                    })
+                    log_debug(f"Scope {scope}: plugin enabled")
+                else:
+                    log_trace(f"Scope {scope}: plugin not in enabledPlugins")
+            except (json.JSONDecodeError, IOError) as e:
+                log_warn(f"Could not read {settings_file}: {e}")
+        return results
+
+    @staticmethod
+    def detect_all_installed_plugins(repo_path: Path) -> dict[str, list[str]]:
+        plugins: dict[str, list[str]] = {}
+        for scope, path_fn in ScopeDetector.SCOPE_FILES.items():
+            settings_file = path_fn(repo_path)
+            if not settings_file.exists():
+                continue
+            try:
+                with open(settings_file) as f:
+                    data = json.load(f)
+                for key, enabled in data.get("enabledPlugins", {}).items():
+                    if enabled:
+                        if key not in plugins:
+                            plugins[key] = []
+                        plugins[key].append(scope)
+            except (json.JSONDecodeError, IOError):
+                pass
+        return plugins
+
+
 def get_known_marketplaces() -> list[str]:
     """Get list of known marketplaces from Claude Code config."""
     path = Path.home() / ".claude" / "plugins" / "known_marketplaces.json"
@@ -507,6 +819,9 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
     global VERBOSITY
     VERBOSITY = args.verbose
 
+    # Ensure cache directory exists
+    ensure_cache_dir()
+
     # Validate plugin@marketplace format
     plugin_name, marketplace, error = validate_plugin_arg(args.plugin)
     if error:
@@ -591,6 +906,15 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
 
     if args.dry_run:
         print("DRY RUN: Would modify the above files")
+        CacheManager.update_plugin(plugin_name, marketplace, success=False)
+        CacheManager.update_marketplace(marketplace)
+        log_entry = build_invocation_entry(
+            plugin_key=plugin_key, plugin_name=plugin_name, marketplace=marketplace,
+            action="install", args=args, project_path=project_path, paths=paths,
+            backup_paths=[], success=True, error=None,
+            interactive_answers={"dry_run": True}
+        )
+        LogManager.append(log_entry)
         return 0
 
     if not ask_confirmation("Proceed with modifications?", args.non_interactive):
@@ -650,6 +974,17 @@ RELATED ISSUES (please add your voice to help prioritize the fix!):
         print(f"\nBackups created:")
         for b in backups:
             print(f"  - {b}")
+
+    # === UPDATE CACHE & LOG ===
+    CacheManager.update_plugin(plugin_name, marketplace, success=True)
+    CacheManager.update_marketplace(marketplace)
+    log_entry = build_invocation_entry(
+        plugin_key=plugin_key, plugin_name=plugin_name, marketplace=marketplace,
+        action="install", args=args, project_path=project_path, paths=paths,
+        backup_paths=backups, success=True, error=None,
+        interactive_answers={}
+    )
+    LogManager.append(log_entry)
 
     return 0
 

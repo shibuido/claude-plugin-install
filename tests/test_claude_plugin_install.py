@@ -40,6 +40,10 @@ Available tests:
     test_backup_created        - Verify backup files created
     test_claude_verify         - Verify plugin in Claude Code TUI (experimental)
     test_idempotent            - Test running twice doesn't break
+    test_cache_dir_created     - Test that cache directory is created on first use
+    test_cache_plugin_remembered - Test that plugin is remembered in cache
+    test_invocation_logged     - Test that invocations are logged
+    test_log_auto_trim         - Test that log auto-trims when exceeding threshold
     test_verbosity_levels      - Test that -v/-vv/-vvv produce different output
 """
 
@@ -460,6 +464,146 @@ def test_idempotent(ctx: TestContext) -> bool:
     return True
 
 
+def test_cache_dir_created(ctx: TestContext) -> bool:
+    """Test that cache directory is created on first use."""
+    log_test("test_cache_dir_created")
+    result = subprocess.run(
+        [sys.executable, str(ctx.script_path), "-p", ctx.plugin_key,
+         "-d", str(ctx.test_dir), "--dry-run", "-y"],
+        capture_output=True, text=True,
+        env={**os.environ, "XDG_CACHE_HOME": str(ctx.test_dir / ".cache")}
+    )
+    cache_dir = ctx.test_dir / ".cache" / "shibuido" / "claude-plugin-install"
+    if not cache_dir.exists():
+        log_fail(f"cache dir not created: {cache_dir}")
+        return False
+    log_success("cache directory created correctly")
+    return True
+
+
+def test_cache_plugin_remembered(ctx: TestContext) -> bool:
+    """Test that installing a plugin adds it to plugins-cache.jsonl."""
+    log_test("test_cache_plugin_remembered")
+    test_cache_dir = ctx.test_dir / ".cache" / "shibuido" / "claude-plugin-install"
+    result = subprocess.run(
+        [sys.executable, str(ctx.script_path), "-p", ctx.plugin_key,
+         "-d", str(ctx.test_dir), "-y"],
+        capture_output=True, text=True,
+        env={**os.environ, "XDG_CACHE_HOME": str(ctx.test_dir / ".cache")}
+    )
+    if result.returncode != 0:
+        log_fail(f"install failed: {result.returncode}")
+        log_verbose(f"stderr: {result.stderr}", ctx.verbose)
+        return False
+    plugins_cache = test_cache_dir / "plugins-cache.jsonl"
+    if not plugins_cache.exists():
+        log_fail("plugins-cache.jsonl not created")
+        return False
+    found = False
+    with open(plugins_cache) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            entry = json.loads(line)
+            if entry.get("key") == ctx.plugin_key:
+                found = True
+                if entry.get("install_count", 0) < 1:
+                    log_fail(f"install_count should be >= 1, got {entry.get('install_count')}")
+                    return False
+                break
+    if not found:
+        log_fail(f"plugin {ctx.plugin_key} not found in plugins-cache.jsonl")
+        return False
+    marketplace_cache = test_cache_dir / "marketplace-cache.jsonl"
+    if not marketplace_cache.exists():
+        log_fail("marketplace-cache.jsonl not created")
+        return False
+    found_mp = False
+    with open(marketplace_cache) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            entry = json.loads(line)
+            if entry.get("marketplace") == ctx.marketplace:
+                found_mp = True
+                break
+    if not found_mp:
+        log_fail(f"marketplace {ctx.marketplace} not found in marketplace-cache.jsonl")
+        return False
+    log_success("plugin and marketplace remembered in cache")
+    return True
+
+
+def test_invocation_logged(ctx: TestContext) -> bool:
+    """Test that invocations are logged to invocations.jsonl."""
+    log_test("test_invocation_logged")
+    test_cache_dir = ctx.test_dir / ".cache" / "shibuido" / "claude-plugin-install"
+    result = subprocess.run(
+        [sys.executable, str(ctx.script_path), "-p", ctx.plugin_key,
+         "-d", str(ctx.test_dir), "-y", "--dry-run"],
+        capture_output=True, text=True,
+        env={**os.environ, "XDG_CACHE_HOME": str(ctx.test_dir / ".cache")}
+    )
+    log_file = test_cache_dir / "invocations.jsonl"
+    if not log_file.exists():
+        log_fail("invocations.jsonl not created")
+        return False
+    entries = []
+    with open(log_file) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                entries.append(json.loads(line))
+    if len(entries) < 1:
+        log_fail("no invocation entries found")
+        return False
+    last = entries[-1]
+    required_fields = ["timestamp", "plugin_key", "action", "argv", "success"]
+    for field in required_fields:
+        if field not in last:
+            log_fail(f"missing field '{field}' in invocation entry")
+            return False
+    if last["plugin_key"] != ctx.plugin_key:
+        log_fail(f"plugin_key mismatch: {last['plugin_key']} != {ctx.plugin_key}")
+        return False
+    if last.get("dry_run") is not True:
+        log_fail("dry_run should be True for --dry-run invocation")
+        return False
+    log_success("invocation logged correctly")
+    return True
+
+
+def test_log_auto_trim(ctx: TestContext) -> bool:
+    """Test that invocations.jsonl auto-trims when exceeding threshold."""
+    log_test("test_log_auto_trim")
+    test_cache_dir = ctx.test_dir / ".cache" / "shibuido" / "claude-plugin-install"
+    test_cache_dir.mkdir(parents=True, exist_ok=True)
+    log_file = test_cache_dir / "invocations.jsonl"
+    with open(log_file, "w") as f:
+        for i in range(2001):
+            entry = {"timestamp": f"2026-01-{(i%28)+1:02d}T00:00:00", "plugin_key": "test@test",
+                     "action": "install", "argv": [], "success": True, "dry_run": False, "seq": i}
+            f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+    result = subprocess.run(
+        [sys.executable, str(ctx.script_path), "-p", ctx.plugin_key,
+         "-d", str(ctx.test_dir), "-y", "--dry-run"],
+        capture_output=True, text=True,
+        env={**os.environ, "XDG_CACHE_HOME": str(ctx.test_dir / ".cache")}
+    )
+    with open(log_file) as f:
+        lines = [l for l in f if l.strip()]
+    if len(lines) > 1100:
+        log_fail(f"auto-trim failed: {len(lines)} lines (expected ~1001)")
+        return False
+    if len(lines) < 1000:
+        log_fail(f"over-trimmed: {len(lines)} lines (expected >= 1000)")
+        return False
+    log_success(f"auto-trim works ({len(lines)} lines after trim)")
+    return True
+
+
 def test_verbosity_levels(ctx: TestContext) -> bool:
     """Test that -v/-vv/-vvv produce different verbosity levels."""
     log_test("test_verbosity_levels")
@@ -503,6 +647,10 @@ TESTS: dict[str, Callable[[TestContext], bool]] = {
     "test_backup_created": test_backup_created,
     "test_claude_verify": test_claude_verify,
     "test_idempotent": test_idempotent,
+    "test_cache_dir_created": test_cache_dir_created,
+    "test_cache_plugin_remembered": test_cache_plugin_remembered,
+    "test_invocation_logged": test_invocation_logged,
+    "test_log_auto_trim": test_log_auto_trim,
     "test_verbosity_levels": test_verbosity_levels,
 }
 
@@ -515,6 +663,10 @@ DEFAULT_TEST_ORDER = [
     "test_backup_created",
     "test_claude_verify",
     "test_idempotent",
+    "test_cache_dir_created",
+    "test_cache_plugin_remembered",
+    "test_invocation_logged",
+    "test_log_auto_trim",
     "test_verbosity_levels",
 ]
 
