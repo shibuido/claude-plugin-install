@@ -68,54 +68,108 @@ source .venv/bin/activate
 python claude-plugin-install -p superpowers@superpowers-marketplace
 ```
 
-## Usage
+## Plugin Memory
 
-### Basic Usage
+Your plugins are remembered. Install once, select from menu forever.
+
+Every plugin you install (or attempt to install) is recorded in a local cache. The next time you run `claude-plugin-install` with no arguments, you will see those plugins listed in the interactive menu -- ready to re-install with a single keypress.
+
+### Where cache files live
+
+```
+~/.cache/shibuido/claude-plugin-install/
+  plugins-cache.jsonl        # remembered plugins
+  marketplace-cache.jsonl    # remembered marketplaces
+  invocations.jsonl          # invocation log
+```
+
+If `XDG_CACHE_HOME` is set, it replaces `~/.cache`:
+
+```
+$XDG_CACHE_HOME/shibuido/claude-plugin-install/
+```
+
+## Interactive Mode
+
+Run with no arguments to enter the interactive menu:
 
 ```bash
-# Close Claude Code first, then:
-./claude-plugin-install -p superpowers@superpowers-marketplace
+./claude-plugin-install
 ```
 
-### All Options
+Example output:
 
 ```
-./claude-plugin-install -p PLUGIN@MARKETPLACE [options]
+Plugin Manager | Repo: /home/user/my-project
 
-Required:
-  -p, --plugin PLUGIN@MARKETPLACE
-                        Plugin with marketplace (e.g., superpowers@superpowers-marketplace)
+-- Installed plugins --------------------------
+  [1] superpowers@superpowers-marketplace  (local)
+  [2] my-tool@my-marketplace  (local, global)
 
-Optional:
-  -s, --scope {project-local,project-shared,user}
-                        Installation scope (default: project-local)
-  -y, --yes             Non-interactive mode: skip all confirmation prompts
-  -n, --dry-run         Show what would be done without making changes
-  -v, --verbose         Enable verbose/debug output
-  -d, --project-path    Project path (default: current directory)
-  -h, --help            Show help message
+-- Remembered plugins (used before) -----------
+  [3] other-plugin@some-marketplace  (last: 2d ago, 3 installs)
+
+Select [1-3] or type plugin@marketplace (q=quit):
 ```
 
-### Examples
+* **Installed plugins** show which scopes they are active in (local, shared, global).
+* **Remembered plugins** show when they were last used and how many times they have been installed.
+* Selecting an installed plugin opens an uninstall sub-menu.
+* Selecting a remembered plugin re-installs it.
+* You can also type a brand new `plugin@marketplace` string to install something fresh.
+
+## Uninstall
+
+Remove a plugin from one or more scopes.
+
+### Interactive uninstall
 
 ```bash
-# Basic usage - install for current project
-./claude-plugin-install -p superpowers@superpowers-marketplace
+./claude-plugin-install uninstall superpowers@superpowers-marketplace
+```
 
-# Non-interactive mode (for scripts)
-./claude-plugin-install -p superpowers@superpowers-marketplace -y
+The tool detects which scopes the plugin is installed in and lets you choose.
 
-# Preview changes without applying
-./claude-plugin-install -p superpowers@superpowers-marketplace --dry-run
+### Non-interactive uninstall
 
-# Install globally for all projects
+```bash
+# Remove from project-local scope
+./claude-plugin-install uninstall superpowers@superpowers-marketplace -l -y
+
+# Remove from user/global scope
+./claude-plugin-install uninstall superpowers@superpowers-marketplace -g -y
+
+# Remove from project-shared/repo scope
+./claude-plugin-install uninstall superpowers@superpowers-marketplace -r -y
+
+# Remove from all scopes
+./claude-plugin-install uninstall superpowers@superpowers-marketplace --all -y
+```
+
+## Scope Shortcuts
+
+| Flag | Scope | File |
+|------|-------|------|
+| `-l` | project-local | `.claude/settings.local.json` |
+| `-r` | project-shared/repo | `.claude/settings.json` |
+| `-g` | user/global | `~/.claude/settings.json` |
+
+These shortcuts work for both install and uninstall:
+
+```bash
+# Install to global scope
+./claude-plugin-install -p superpowers@superpowers-marketplace -g
+
+# Uninstall from local scope
+./claude-plugin-install uninstall superpowers@superpowers-marketplace -l -y
+```
+
+You can also use the long form `-s`/`--scope`:
+
+```bash
 ./claude-plugin-install -p superpowers@superpowers-marketplace --scope user
-
-# Debug mode with verbose output
-./claude-plugin-install -p superpowers@superpowers-marketplace -v
-
-# Install for a specific project directory
-./claude-plugin-install -p superpowers@superpowers-marketplace -d /path/to/project
+./claude-plugin-install -p superpowers@superpowers-marketplace --scope project-shared
+./claude-plugin-install -p superpowers@superpowers-marketplace --scope project-local
 ```
 
 ## Scope Options Explained
@@ -141,6 +195,155 @@ Optional:
 * Git: N/A (user home directory)
 * Use when: You want the plugin everywhere
 
+## Cache Management
+
+Manage remembered plugins and marketplaces:
+
+```bash
+# List all remembered plugins
+./claude-plugin-install cache list
+
+# List remembered marketplaces
+./claude-plugin-install cache list-marketplaces
+
+# Forget a specific plugin
+./claude-plugin-install cache remove superpowers@superpowers-marketplace
+
+# Clear all plugin memory
+./claude-plugin-install cache clear
+```
+
+## Log Management
+
+View and manage the invocation history:
+
+```bash
+# Show last 10 invocations (default)
+./claude-plugin-install log show
+
+# Show last 20 invocations
+./claude-plugin-install log show --last 20
+
+# Trim log to last 500 entries
+./claude-plugin-install log trim --keep 500
+
+# Trim entries older than 30 days
+./claude-plugin-install log trim --days 30
+```
+
+## Non-interactive / CI Usage
+
+For automated scripts and CI pipelines, combine `-p` with `-y`:
+
+```bash
+./claude-plugin-install -p superpowers@superpowers-marketplace -y
+```
+
+Add `-n` for dry-run (preview only):
+
+```bash
+./claude-plugin-install -p superpowers@superpowers-marketplace -y -n
+```
+
+Uninstall non-interactively (must specify scope):
+
+```bash
+./claude-plugin-install uninstall superpowers@superpowers-marketplace -l -y
+./claude-plugin-install uninstall superpowers@superpowers-marketplace --all -y
+```
+
+## Usage
+
+### Basic Usage
+
+```bash
+# Close Claude Code first, then:
+./claude-plugin-install -p superpowers@superpowers-marketplace
+```
+
+### All Options
+
+```
+./claude-plugin-install [options]
+./claude-plugin-install -p PLUGIN@MARKETPLACE [options]
+./claude-plugin-install uninstall PLUGIN@MARKETPLACE [options]
+./claude-plugin-install cache {list|list-marketplaces|remove|clear}
+./claude-plugin-install log {show|trim}
+
+Install options:
+  -p, --plugin PLUGIN@MARKETPLACE
+                        Plugin with marketplace (e.g., superpowers@superpowers-marketplace)
+  -s, --scope {project-local,project-shared,user}
+                        Installation scope (default: project-local)
+  -l                    Shortcut: project-local scope
+  -g                    Shortcut: user/global scope
+  -r                    Shortcut: project-shared/repo scope
+  -y, --yes             Non-interactive mode: skip all confirmation prompts
+  -n, --dry-run         Show what would be done without making changes
+  -v, --verbose         Increase verbosity (-v=INFO, -vv=DEBUG, -vvv=TRACE)
+  -d, --project-path    Project path (default: current directory)
+  -h, --help            Show help message
+
+Uninstall options:
+  plugin                PLUGIN@MARKETPLACE (positional argument)
+  -l / -g / -r          Scope shortcut (required for non-interactive)
+  --all                 Uninstall from all scopes
+  -y, --yes             Non-interactive mode
+
+Cache subcommands:
+  list                  List remembered plugins
+  list-marketplaces     List remembered marketplaces
+  remove PLUGIN@MKTPL  Forget a specific plugin
+  clear                 Clear all plugin memory
+
+Log subcommands:
+  show                  Show recent invocations (--last N)
+  trim                  Trim log entries (--keep N, --days N)
+```
+
+### Examples
+
+```bash
+# Interactive menu (no arguments)
+./claude-plugin-install
+
+# Basic install for current project
+./claude-plugin-install -p superpowers@superpowers-marketplace
+
+# Non-interactive mode (for scripts)
+./claude-plugin-install -p superpowers@superpowers-marketplace -y
+
+# Preview changes without applying
+./claude-plugin-install -p superpowers@superpowers-marketplace --dry-run
+
+# Install globally for all projects
+./claude-plugin-install -p superpowers@superpowers-marketplace -g
+
+# Install to project-shared scope (committed to git)
+./claude-plugin-install -p superpowers@superpowers-marketplace -r
+
+# Verbose output for debugging
+./claude-plugin-install -p superpowers@superpowers-marketplace -vvv
+
+# Install for a specific project directory
+./claude-plugin-install -p superpowers@superpowers-marketplace -d /path/to/project
+
+# Uninstall interactively
+./claude-plugin-install uninstall superpowers@superpowers-marketplace
+
+# Uninstall from local scope, non-interactive
+./claude-plugin-install uninstall superpowers@superpowers-marketplace -l -y
+
+# Uninstall from all scopes
+./claude-plugin-install uninstall superpowers@superpowers-marketplace --all -y
+
+# View remembered plugins
+./claude-plugin-install cache list
+
+# View recent invocation log
+./claude-plugin-install log show --last 5
+```
+
 ## How It Works
 
 The script performs these steps:
@@ -162,7 +365,12 @@ The script performs these steps:
    * Creates/updates the settings file for the chosen scope
    * Adds `enabledPlugins` entry for the plugin
 
-5. **Success**
+5. **Updates plugin memory**
+   * Records the plugin in `plugins-cache.jsonl`
+   * Records the marketplace in `marketplace-cache.jsonl`
+   * Logs the invocation in `invocations.jsonl`
+
+6. **Success**
    * Reports what was changed
    * Lists backup files created
 
@@ -192,7 +400,7 @@ Try running `/plugin marketplace add owner/marketplace-name` again in Claude Cod
 1. Make sure you closed Claude Code before running the script
 2. Restart Claude Code completely
 3. Check `/plugin` -> Installed tab
-4. Try running with `-v` for verbose output
+4. Try running with `-vvv` for full trace output
 
 ### "already installed" warning
 
@@ -210,7 +418,7 @@ This tool follows conservative safety principles:
 3. **Interactive by default** - Asks for confirmation at each step
 4. **Verbose logging** - Full visibility into what's happening
 5. **Fail-safe** - On any error, provides debug info for issue reporting
-6. **No destructive ops** - Only adds entries, never removes existing ones
+6. **No destructive ops** - Only adds entries, never removes existing ones (except uninstall)
 
 ## Contributing
 
@@ -229,8 +437,10 @@ cd claude-plugin-install
 ./tests/test_claude_plugin_install.py
 
 # Run with verbose output for debugging
-./claude-plugin-install -p superpowers@superpowers-marketplace -v --dry-run
+./claude-plugin-install -p superpowers@superpowers-marketplace -vvv --dry-run
 ```
+
+See [claude-plugin-install.DEV_NOTES.md](claude-plugin-install.DEV_NOTES.md) for developer internals and debugging workflows.
 
 ## License
 
