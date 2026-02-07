@@ -48,6 +48,7 @@ Available tests:
     test_uninstall             - Test that uninstall removes plugin from settings
     test_scope_detection       - Test that no-args mode shows installed plugins
     test_verbosity_levels      - Test that -v/-vv/-vvv produce different output
+    test_full_workflow         - End-to-end: install -> cache -> log -> uninstall -> memory
 """
 
 import argparse
@@ -722,6 +723,77 @@ def test_verbosity_levels(ctx: TestContext) -> bool:
     return True
 
 
+def test_full_workflow(ctx: TestContext) -> bool:
+    """End-to-end: install -> cache check -> uninstall -> cache still has memory."""
+    log_test("test_full_workflow")
+
+    env = {**os.environ, "XDG_CACHE_HOME": str(ctx.test_dir / ".cache")}
+
+    # 1. Install
+    result = subprocess.run(
+        [sys.executable, str(ctx.script_path), "-p", ctx.plugin_key,
+         "-d", str(ctx.test_dir), "-y"],
+        capture_output=True, text=True, env=env
+    )
+    if result.returncode != 0:
+        log_fail(f"install failed: {result.returncode}")
+        log_verbose(f"stderr: {result.stderr}", ctx.verbose)
+        return False
+
+    # 2. Check cache has the plugin
+    result = subprocess.run(
+        [sys.executable, str(ctx.script_path), "cache", "list"],
+        capture_output=True, text=True, env=env
+    )
+    if ctx.plugin_key not in result.stdout:
+        log_fail("plugin not in cache list after install")
+        log_verbose(f"stdout: {result.stdout}", ctx.verbose)
+        return False
+
+    # 3. Check log has entry
+    result = subprocess.run(
+        [sys.executable, str(ctx.script_path), "log", "show", "--last", "1"],
+        capture_output=True, text=True, env=env
+    )
+    if ctx.plugin_key not in result.stdout:
+        log_fail("plugin not in log after install")
+        log_verbose(f"stdout: {result.stdout}", ctx.verbose)
+        return False
+
+    # 4. Uninstall
+    result = subprocess.run(
+        [sys.executable, str(ctx.script_path), "uninstall", ctx.plugin_key,
+         "-l", "-y", "-d", str(ctx.test_dir)],
+        capture_output=True, text=True, env=env
+    )
+    if result.returncode != 0:
+        log_fail(f"uninstall failed: {result.returncode}")
+        log_verbose(f"stderr: {result.stderr}", ctx.verbose)
+        return False
+
+    # 5. Plugin should still be in cache (memory preserved)
+    result = subprocess.run(
+        [sys.executable, str(ctx.script_path), "cache", "list"],
+        capture_output=True, text=True, env=env
+    )
+    if ctx.plugin_key not in result.stdout:
+        log_fail("plugin should still be in cache after uninstall")
+        log_verbose(f"stdout: {result.stdout}", ctx.verbose)
+        return False
+
+    # 6. Verify settings file no longer has plugin
+    settings_file = ctx.test_dir / ".claude" / "settings.local.json"
+    if settings_file.exists():
+        with open(settings_file) as f:
+            data = json.load(f)
+        if ctx.plugin_key in data.get("enabledPlugins", {}):
+            log_fail("plugin still in settings after uninstall")
+            return False
+
+    log_success("full workflow (install -> cache -> uninstall -> memory preserved)")
+    return True
+
+
 # ============================================================================
 # TEST REGISTRY
 # ============================================================================
@@ -743,6 +815,7 @@ TESTS: dict[str, Callable[[TestContext], bool]] = {
     "test_uninstall": test_uninstall,
     "test_scope_detection": test_scope_detection,
     "test_verbosity_levels": test_verbosity_levels,
+    "test_full_workflow": test_full_workflow,
 }
 
 DEFAULT_TEST_ORDER = [
@@ -762,6 +835,7 @@ DEFAULT_TEST_ORDER = [
     "test_uninstall",
     "test_scope_detection",
     "test_verbosity_levels",
+    "test_full_workflow",
 ]
 
 
