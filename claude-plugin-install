@@ -859,6 +859,15 @@ class MenuHandler:
     """Interactive menu for plugin management."""
 
     @staticmethod
+    def _detect_fuzzy_finder() -> Optional[str]:
+        """Detect available fuzzy finder: sk -> fzf -> None."""
+        if shutil.which("sk"):
+            return "sk"
+        if shutil.which("fzf"):
+            return "fzf"
+        return None
+
+    @staticmethod
     def display_menu(repo_path: Path) -> Optional[dict]:
         """Display interactive menu and return selection."""
         print(f"\n{color('Plugin Manager', Colors.CYAN)} | Repo: {color(str(repo_path), Colors.BOLD)}\n")
