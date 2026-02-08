@@ -95,6 +95,7 @@ def log_step(msg: str) -> None:
 # === Constants & Paths ===
 VERSION = "0.2.0"
 LOG_MIN_ENTRIES = 1000
+MENU_LIMIT_DEFAULT = 15
 
 
 def get_cache_dir() -> Path:
@@ -1006,6 +1007,108 @@ class MenuHandler:
                 if item["line"].strip() == sel:
                     matched.append(item)
                     break
+
+        return matched if matched else None
+
+    @staticmethod
+    def _menu_fallback(items: list[dict], repo_path: Path) -> Optional[list[dict]]:
+        """Fallback numbered menu with threshold and comma multi-select."""
+        print(f"\n{color('Plugin Manager', Colors.CYAN)} | Repo: {color(str(repo_path), Colors.BOLD)}\n")
+
+        # --- Installed plugins (tag == "i") -- always shown, no limit ---
+        installed_items = [it for it in items if it["tag"] == "i"]
+        if installed_items:
+            print(color("-- Installed plugins --------------------------", Colors.GREEN))
+            for it in installed_items:
+                scope_str = ", ".join(
+                    ScopeDetector.SCOPE_SHORTCUTS.get(s, s) for s in it["scopes"]
+                )
+                print(f"  [{it['idx']}] {color(it['key'], Colors.BOLD)}  ({scope_str})")
+            print()
+
+        # --- Available plugins (tag == "a") -- limited by threshold ---
+        available_items = [it for it in items if it["tag"] == "a"]
+        try:
+            limit = int(os.environ.get("CPI_MENU_LIMIT", MENU_LIMIT_DEFAULT))
+        except (ValueError, TypeError):
+            limit = MENU_LIMIT_DEFAULT
+        limit = max(1, limit)
+
+        if available_items:
+            print(color("-- Available plugins --------------------------", Colors.BLUE))
+            shown = available_items[:limit]
+            for it in shown:
+                # Build metadata string with "ago" calculation
+                count = it.get("use_count", 0)
+                last_used = it.get("last_used", "")
+                try:
+                    from_dt = datetime.fromisoformat(last_used)
+                    delta = datetime.now() - from_dt
+                    if delta.days == 0:
+                        ago = "today"
+                    elif delta.days == 1:
+                        ago = "1d ago"
+                    elif delta.days < 7:
+                        ago = f"{delta.days}d ago"
+                    elif delta.days < 30:
+                        ago = f"{delta.days // 7}w ago"
+                    else:
+                        ago = f"{delta.days // 30}mo ago"
+                except (ValueError, TypeError):
+                    ago = "?"
+                metadata = f"last: {ago}, {count} installs"
+                print(f"  [{it['idx']}] {it['key']}  ({metadata})")
+                desc = it.get("description", "")
+                if desc:
+                    print(f"       {color(desc, Colors.CYAN)}")
+
+            remaining = len(available_items) - limit
+            if remaining > 0:
+                print(f"  ... and {remaining} more plugins. Install sk or fzf for fuzzy search.")
+            print()
+
+        if not installed_items and not available_items:
+            print("  No installed or remembered plugins.")
+            print("  Type a plugin@marketplace to install, or 'q' to quit.\n")
+
+        # --- Prompt for input ---
+        if items:
+            prompt_text = f"Select [1-{items[-1]['idx']}], comma-separate for multiple (q=quit): "
+        else:
+            prompt_text = "Type plugin@marketplace (q=quit): "
+        try:
+            choice = input(prompt_text).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+
+        if not choice or choice.lower() == "q":
+            return None
+
+        # --- Parse input ---
+        # Text with @: treat as typed plugin key
+        if "@" in choice and not choice.replace(",", "").replace(" ", "").isdigit():
+            return [{"key": choice.strip(), "installed": False, "typed": True}]
+
+        # Try parsing as comma-separated numbers
+        try:
+            nums = [int(n.strip()) for n in choice.split(",") if n.strip()]
+        except ValueError:
+            print(f"Invalid input. Use numbers or plugin@marketplace format.")
+            return None
+
+        if not nums:
+            return None
+
+        # Build lookup by idx
+        by_idx = {it["idx"]: it for it in items}
+        matched: list[dict] = []
+        for n in nums:
+            if n in by_idx:
+                matched.append(by_idx[n])
+            else:
+                print(f"Invalid selection: {n}")
+                return None
 
         return matched if matched else None
 
