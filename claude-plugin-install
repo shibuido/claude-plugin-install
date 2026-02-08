@@ -46,6 +46,7 @@ class Colors:
     BLUE = "\033[94m"
     MAGENTA = "\033[95m"
     CYAN = "\033[96m"
+    DIM = "\033[2m"
 
 
 # Module-level verbosity: 0=quiet, 1=info(-v), 2=debug(-vv), 3=trace(-vvv)
@@ -866,6 +867,117 @@ class MenuHandler:
         if shutil.which("fzf"):
             return "fzf"
         return None
+
+    @staticmethod
+    def _build_menu_items(repo_path: Path) -> list[dict]:
+        """Build sorted list of dicts representing all plugins for the interactive menu.
+
+        Returns a list of dicts, each with keys:
+            idx, key, tag, installed, scopes, description, use_count, last_used, line
+
+        Sorting order:
+            1. Installed plugins (alphabetical by key)
+            2. Previously-used plugins (use_count > 0, by use_count desc, last_used desc)
+            3. Never-used plugins (use_count == 0, alphabetical by key)
+        """
+        KEY_WIDTH = 48
+        DESC_MAX = 60
+
+        installed = ScopeDetector.detect_all_installed_plugins(repo_path)
+        cached = CacheManager.list_plugins()
+
+        # Build a lookup from cache keyed by plugin key
+        cache_by_key: dict[str, dict] = {}
+        for entry in cached:
+            cache_by_key[entry["key"]] = entry
+
+        # --- Group 1: Installed plugins, alphabetical ---
+        group_installed: list[dict] = []
+        for key in sorted(installed.keys()):
+            ce = cache_by_key.get(key, {})
+            group_installed.append({
+                "key": key,
+                "tag": "i",
+                "installed": True,
+                "scopes": installed[key],
+                "description": ce.get("description", ""),
+                "use_count": ce.get("use_count", 0),
+                "last_used": ce.get("last_used", ""),
+            })
+
+        # --- Available (not installed) plugins from cache ---
+        available = [
+            e for e in cached if e["key"] not in installed
+        ]
+        # Group 2: previously used (use_count > 0)
+        def _safe_ts(val: str) -> float:
+            """Parse ISO timestamp to epoch float, returning 0 on failure."""
+            try:
+                return datetime.fromisoformat(val).timestamp() if val else 0
+            except (ValueError, TypeError):
+                return 0
+
+        group_used = sorted(
+            [e for e in available if e.get("use_count", 0) > 0],
+            key=lambda e: (-(e.get("use_count", 0)),
+                           -_safe_ts(e.get("last_used", ""))),
+        )
+        # Group 3: never used (use_count == 0)
+        group_never = sorted(
+            [e for e in available if e.get("use_count", 0) == 0],
+            key=lambda e: e["key"],
+        )
+
+        # Convert groups 2 and 3 into the common dict format
+        def _avail_dict(entry: dict) -> dict:
+            return {
+                "key": entry["key"],
+                "tag": "a",
+                "installed": False,
+                "scopes": [],
+                "description": entry.get("description", ""),
+                "use_count": entry.get("use_count", 0),
+                "last_used": entry.get("last_used", ""),
+            }
+
+        all_items: list[dict] = (
+            group_installed
+            + [_avail_dict(e) for e in group_used]
+            + [_avail_dict(e) for e in group_never]
+        )
+
+        total = len(all_items)
+        idx_width = len(str(total)) if total else 1
+
+        # Assign idx and build display line
+        for i, item in enumerate(all_items, start=1):
+            item["idx"] = i
+
+            tag = item["tag"]
+            num_str = str(i).rjust(idx_width)
+
+            # Tag color: green for installed, blue for available
+            if tag == "i":
+                tag_color = Colors.GREEN
+            else:
+                tag_color = Colors.BLUE
+            tag_part = color(f"{num_str}{tag}.", tag_color)
+
+            # Key padded to align :: separators
+            padded_key = item["key"].ljust(KEY_WIDTH)
+
+            # Description, truncated if needed
+            desc = item["description"]
+            if len(desc) > DESC_MAX:
+                desc = desc[:DESC_MAX - 3] + "..."
+            if desc:
+                desc_part = f" {Colors.DIM}::{Colors.RESET} {color(desc, Colors.CYAN)}"
+            else:
+                desc_part = ""
+
+            item["line"] = f"{tag_part} {padded_key}{desc_part}"
+
+        return all_items
 
     @staticmethod
     def display_menu(repo_path: Path) -> Optional[dict]:
