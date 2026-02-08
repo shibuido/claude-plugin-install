@@ -69,7 +69,7 @@ tmux send-keys -t test14b "XDG_CACHE_HOME=$XDG_CACHE_HOME $SCRIPT -d $REPO_DIR" 
 sleep 2
 MENU2_OUTPUT=$(tmux capture-pane -t test14b -p 2>/dev/null) || true
 
-assert_contains "menu shows remembered section" "$MENU2_OUTPUT" "Remembered"
+assert_contains "menu shows available section" "$MENU2_OUTPUT" "Available"
 assert_contains "menu shows remembered plugin" "$MENU2_OUTPUT" "$PLUGIN_KEY"
 
 # Quit

@@ -1113,149 +1113,93 @@ class MenuHandler:
         return matched if matched else None
 
     @staticmethod
-    def display_menu(repo_path: Path) -> Optional[dict]:
-        """Display interactive menu and return selection."""
-        print(f"\n{color('Plugin Manager', Colors.CYAN)} | Repo: {color(str(repo_path), Colors.BOLD)}\n")
-        installed = ScopeDetector.detect_all_installed_plugins(repo_path)
-        cached = CacheManager.list_plugins()
-        items = []
-        idx = 1
-
-        if installed:
-            print(color("-- Installed plugins --------------------------", Colors.GREEN))
-            for key, scopes in sorted(installed.items()):
-                scope_str = ", ".join(
-                    f"{ScopeDetector.SCOPE_SHORTCUTS.get(s, s)}" for s in scopes
-                )
-                print(f"  [{idx}] {color(key, Colors.BOLD)}  ({scope_str})")
-                items.append({"idx": idx, "key": key, "installed": True, "scopes": scopes})
-                idx += 1
-            print()
-
-        remembered = [e for e in cached if e["key"] not in installed]
-        if remembered:
-            print(color("-- Remembered plugins (used before) -----------", Colors.BLUE))
-            for entry in remembered:
-                count = entry.get("install_count", 0)
-                try:
-                    from_dt = datetime.fromisoformat(entry.get("last_used", ""))
-                    delta = datetime.now() - from_dt
-                    if delta.days == 0:
-                        ago = "today"
-                    elif delta.days == 1:
-                        ago = "1d ago"
-                    elif delta.days < 7:
-                        ago = f"{delta.days}d ago"
-                    elif delta.days < 30:
-                        ago = f"{delta.days // 7}w ago"
-                    else:
-                        ago = f"{delta.days // 30}mo ago"
-                except (ValueError, TypeError):
-                    ago = "?"
-                desc = entry.get("description", "")
-                desc_str = f"\n         {color(desc, Colors.CYAN)}" if desc else ""
-                print(f"  [{idx}] {entry['key']}  (last: {ago}, {count} installs){desc_str}")
-                items.append({"idx": idx, "key": entry["key"], "installed": False})
-                idx += 1
-            print()
-
+    def display_menu(repo_path: Path) -> Optional[list[dict]]:
+        """Display interactive menu, return selected item(s)."""
+        items = MenuHandler._build_menu_items(repo_path)
         if not items:
-            print("  No installed or remembered plugins.")
-            print(f"  Type a plugin@marketplace to install, or 'q' to quit.\n")
-
-        try:
-            choice = input(f"Select [1-{max(1, idx-1)}] or type plugin@marketplace (q=quit): ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
+            print("  No plugins available. Run: cache sync")
             return None
 
-        if not choice or choice.lower() == "q":
-            return None
-
-        try:
-            num = int(choice)
-            for item in items:
-                if item["idx"] == num:
-                    return item
-            print(f"Invalid selection: {num}")
-            return None
-        except ValueError:
-            pass
-
-        if "@" in choice:
-            return {"key": choice, "installed": False, "typed": True}
-
-        print(f"Invalid input. Use a number or plugin@marketplace format.")
-        return None
-
-    @staticmethod
-    def handle_installed_selection(plugin_key: str, scopes: list[str], repo_path: Path) -> Optional[dict]:
-        """Handle selection of an already-installed plugin."""
-        print(f"\n{color('Selected:', Colors.BOLD)} {plugin_key}")
-        print("Currently enabled in:")
-        for i, scope in enumerate(scopes, 1):
-            shortcut = ScopeDetector.SCOPE_SHORTCUTS.get(scope, scope)
-            path_fn = ScopeDetector.SCOPE_FILES[scope]
-            print(f"  [{i}] {shortcut}  ({path_fn(repo_path)})")
-        print(f"\n  [u] Uninstall from selected scope(s)")
-        print(f"  [a] Uninstall from all")
-        print(f"  [b] Back")
-        try:
-            action = input(f"\nAction: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return None
-        if action == "b" or not action:
-            return None
-        elif action == "a":
-            return {"action": "uninstall", "plugin_key": plugin_key, "scopes": scopes}
-        elif action == "u":
-            print("Enter scope numbers (comma-separated) to uninstall from:")
-            try:
-                picks = input("> ").strip()
-            except (EOFError, KeyboardInterrupt):
-                return None
-            selected_scopes = []
-            for p in picks.split(","):
-                p = p.strip()
-                try:
-                    i = int(p) - 1
-                    if 0 <= i < len(scopes):
-                        selected_scopes.append(scopes[i])
-                except ValueError:
-                    pass
-            if selected_scopes:
-                return {"action": "uninstall", "plugin_key": plugin_key, "scopes": selected_scopes}
-        return None
+        finder = MenuHandler._detect_fuzzy_finder()
+        if finder:
+            return MenuHandler._menu_fuzzy(items, finder, repo_path)
+        else:
+            return MenuHandler._menu_fallback(items, repo_path)
 
 
 def cmd_interactive_menu(args) -> int:
     """Interactive menu when no -p plugin is provided."""
     project_path = args.project_path.resolve()
-    selection = MenuHandler.display_menu(project_path)
-    if selection is None:
+    selections = MenuHandler.display_menu(project_path)
+    if not selections:
         return 0
-    plugin_key = selection["key"]
-    if selection.get("installed"):
-        result = MenuHandler.handle_installed_selection(
-            plugin_key, selection["scopes"], project_path
-        )
-        if result and result.get("action") == "uninstall":
-            args.plugin = plugin_key
-            args.all_scopes = len(result["scopes"]) == len(ScopeDetector.SCOPE_FILES)
-            args.subcommand = "uninstall"
-            if not args.all_scopes and len(result["scopes"]) == 1:
-                args.scope_shortcut = result["scopes"][0]
-                args.scope = result["scopes"][0]
-            return cmd_uninstall(args)
-        return 0
-    else:
-        plugin_name, marketplace, error = validate_plugin_arg(plugin_key)
-        if error:
-            log_error(error)
-            return 1
-        args.plugin = plugin_key
-        return cmd_install(args)
+
+    # Single selection - keep current behavior
+    if len(selections) == 1:
+        sel = selections[0]
+        plugin_key = sel["key"]
+
+        if sel.get("installed"):
+            # Installed plugin: offer uninstall
+            scopes = sel.get("scopes", [])
+            print(f"\n{color('Selected:', Colors.BOLD)} {plugin_key}")
+            print(f"Currently installed in: {', '.join(scopes)}")
+            if ask_confirmation("Uninstall from all scopes?", getattr(args, 'non_interactive', False)):
+                iter_args = argparse.Namespace(**vars(args))
+                iter_args.plugin = plugin_key
+                iter_args.all_scopes = True
+                iter_args.subcommand = "uninstall"
+                return cmd_uninstall(iter_args)
+            return 0
+        else:
+            # Available plugin: install it
+            _, _, error = validate_plugin_arg(plugin_key)
+            if error:
+                log_error(error)
+                return 1
+            iter_args = argparse.Namespace(**vars(args))
+            iter_args.plugin = plugin_key
+            return cmd_install(iter_args)
+
+    # Multi-select
+    installed_sels = [s for s in selections if s.get("installed")]
+    available_sels = [s for s in selections if not s.get("installed")]
+
+    failures = 0
+
+    if available_sels:
+        print(f"\n{color('Installing', Colors.BOLD)} {len(available_sels)} plugin(s):")
+        for sel in available_sels:
+            print(f"  - {sel['key']}")
+        if not ask_confirmation("Proceed?", getattr(args, 'non_interactive', False)):
+            return 0
+        for sel in available_sels:
+            _, _, error = validate_plugin_arg(sel["key"])
+            if error:
+                log_error(error)
+                failures += 1
+                continue
+            iter_args = argparse.Namespace(**vars(args))
+            iter_args.plugin = sel["key"]
+            ret = cmd_install(iter_args)
+            if ret != 0:
+                failures += 1
+
+    if installed_sels:
+        print(f"\n{color('Selected installed plugins:', Colors.BOLD)}")
+        for sel in installed_sels:
+            print(f"  - {sel['key']}  ({', '.join(sel.get('scopes', []))})")
+        if ask_confirmation("Uninstall all selected from all scopes?", getattr(args, 'non_interactive', False)):
+            for sel in installed_sels:
+                iter_args = argparse.Namespace(**vars(args))
+                iter_args.plugin = sel["key"]
+                iter_args.all_scopes = True
+                iter_args.subcommand = "uninstall"
+                ret = cmd_uninstall(iter_args)
+                if ret != 0:
+                    failures += 1
+
+    return 1 if failures else 0
 
 
 def cmd_install(args) -> int:
