@@ -31,6 +31,7 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -978,6 +979,35 @@ class MenuHandler:
             item["line"] = f"{tag_part} {padded_key}{desc_part}"
 
         return all_items
+
+    @staticmethod
+    def _menu_fuzzy(items: list[dict], finder: str, repo_path: Path) -> Optional[list[dict]]:
+        """Run sk/fzf with multi-select, return selected items."""
+        input_text = "\n".join(item["line"] for item in items)
+
+        cmd = [
+            finder, "-m",
+            "--ansi",
+            "--reverse",
+            "--prompt", "Plugin> ",
+            "--header", "TAB=toggle  ENTER=confirm  ESC=quit",
+        ]
+
+        result = subprocess.run(cmd, input=input_text, capture_output=True, text=True)
+
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+
+        selected_lines = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+
+        matched: list[dict] = []
+        for sel in selected_lines:
+            for item in items:
+                if item["line"].strip() == sel:
+                    matched.append(item)
+                    break
+
+        return matched if matched else None
 
     @staticmethod
     def display_menu(repo_path: Path) -> Optional[dict]:
