@@ -68,6 +68,18 @@ source .venv/bin/activate
 python claude-plugin-install -p superpowers@superpowers-marketplace
 ```
 
+### Self-install (PATH Detection)
+
+When run interactively, the tool checks if `claude-plugin-install` is available on your PATH. If not, it offers to create a symlink:
+
+```
+TIP: claude-plugin-install is not on your PATH.
+  To make it available everywhere, run:
+    mkdir -p ~/.local/bin && ln -sf /path/to/claude-plugin-install ~/.local/bin/claude-plugin-install
+
+  Install now? [Y/n]
+```
+
 ## Plugin Memory
 
 Your plugins are remembered. Install once, select from menu forever.
@@ -89,6 +101,22 @@ If `XDG_CACHE_HOME` is set, it replaces `~/.cache`:
 $XDG_CACHE_HOME/shibuido/claude-plugin-install/
 ```
 
+### Marketplace Sync
+
+Import all available plugins (with descriptions and versions) from your installed marketplaces:
+
+```bash
+# Sync all known marketplaces
+./claude-plugin-install cache sync
+
+# Sync a specific marketplace
+./claude-plugin-install cache sync superpowers-marketplace
+```
+
+Sync reads each marketplace's `marketplace.json` and imports all plugin entries into the local cache. After syncing, `cache list` and the interactive menu show plugin descriptions and versions.
+
+Sync is idempotent -- re-running it does not create duplicates.
+
 ## Interactive Mode
 
 Run with no arguments to enter the interactive menu:
@@ -103,20 +131,51 @@ Example output:
 Plugin Manager | Repo: /home/user/my-project
 
 -- Installed plugins --------------------------
-  [1] superpowers@superpowers-marketplace  (local)
-  [2] my-tool@my-marketplace  (local, global)
+  1i. superpowers@superpowers-marketplace     :: Core skills library: TDD, debugging...  (local)
+  2i. my-tool@my-marketplace                  :: Custom dev utilities  (local, global)
 
--- Remembered plugins (used before) -----------
-  [3] other-plugin@some-marketplace  (last: 2d ago, 3 installs)
+-- Available plugins --------------------------
+  3a. other-plugin@some-marketplace           :: Useful plugin for X  (last: 2d ago, 3 installs)
+  4a. brand-new@some-marketplace              :: Fresh plugin  (last: ?, 0 installs)
 
-Select [1-3] or type plugin@marketplace (q=quit):
+Select [1-4], type plugin@marketplace, or q to quit:
 ```
 
 * **Installed plugins** show which scopes they are active in (local, shared, global).
-* **Remembered plugins** show when they were last used and how many times they have been installed.
-* Selecting an installed plugin opens an uninstall sub-menu.
-* Selecting a remembered plugin re-installs it.
+* **Available plugins** show when they were last used and how many times they have been installed.
+* Selecting an installed plugin offers to uninstall it.
+* Selecting an available plugin installs it.
 * You can also type a brand new `plugin@marketplace` string to install something fresh.
+
+### Fuzzy Search
+
+If `sk` (skim) or `fzf` is installed, the menu automatically uses fuzzy search instead of a numbered list. `sk` is preferred when both are available.
+
+* Use **TAB** to toggle multiple selections
+* Press **Enter** to confirm
+* Press **ESC** to quit
+
+The tool passes `--ansi --reverse --prompt "Plugin> "` to the finder.
+
+### Fallback Mode
+
+When neither `sk` nor `fzf` is available, the tool falls back to a numbered menu.
+
+* Select by number, or type comma-separated numbers (e.g., `1,2,3`) to select multiple
+* Type a new `plugin@marketplace` string to install directly
+* Selecting an installed plugin offers to uninstall it
+* Selecting an available plugin installs it
+
+### CPI_MENU_LIMIT
+
+Controls the maximum number of available plugins shown in fallback mode (default: 15).
+
+```bash
+CPI_MENU_LIMIT=30 ./claude-plugin-install
+```
+
+* Installed plugins are always shown regardless of the limit.
+* When more plugins exist than the limit, the menu shows: `"... and N more plugins. Install sk or fzf for fuzzy search."`
 
 ## Uninstall
 
@@ -211,6 +270,12 @@ Manage remembered plugins and marketplaces:
 
 # Clear all plugin memory
 ./claude-plugin-install cache clear
+
+# Import all plugins from marketplaces
+./claude-plugin-install cache sync
+
+# Import from a specific marketplace
+./claude-plugin-install cache sync superpowers-marketplace
 ```
 
 ## Log Management
@@ -295,10 +360,14 @@ Cache subcommands:
   list-marketplaces     List remembered marketplaces
   remove PLUGIN@MKTPL  Forget a specific plugin
   clear                 Clear all plugin memory
+  sync [MARKETPLACE]    Import plugins from marketplaces (all if no argument)
 
 Log subcommands:
   show                  Show recent invocations (--last N)
   trim                  Trim log entries (--keep N, --days N)
+
+Environment variables:
+  CPI_MENU_LIMIT        Max available plugins shown in fallback menu (default: 15)
 ```
 
 ### Examples
@@ -434,7 +503,7 @@ git clone https://github.com/shibuido/claude-plugin-install.git
 cd claude-plugin-install
 
 # Run tests
-./tests/test_claude_plugin_install.py
+./testing/run_tests.sh
 
 # Run with verbose output for debugging
 ./claude-plugin-install -p superpowers@superpowers-marketplace -vvv --dry-run
