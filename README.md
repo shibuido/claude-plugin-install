@@ -84,7 +84,18 @@ Run with no arguments to get the interactive menu:
 ./claude-plugin-install
 ```
 
-The menu shows installed plugins (with their scopes) and remembered plugins from previous sessions. Select by number or type a new `plugin@marketplace` to install.
+The menu shows installed plugins (with their scopes) and remembered plugins from previous sessions.
+
+**Fuzzy search:** If `sk` ([skim](https://github.com/lotabout/skim)) or `fzf` is installed, the menu uses fuzzy search instead of a numbered list. `sk` is preferred when both are available.
+
+* In fuzzy mode, use **TAB** to toggle multiple selections, then press **Enter** to confirm.
+* In fallback (numbered) mode, select by number or type comma-separated numbers (e.g., `1,2,3`) to install multiple plugins at once. You can also type a new `plugin@marketplace` to install directly.
+
+**`CPI_MENU_LIMIT`:** Controls how many available plugins are shown in the fallback numbered menu (default: 15). Set this environment variable to see more or fewer entries:
+
+```bash
+CPI_MENU_LIMIT=30 ./claude-plugin-install
+```
 
 ## Uninstall
 
@@ -126,6 +137,9 @@ Options:
   -n, --dry-run   Preview changes only
   -v              Verbose output (-v info, -vv debug, -vvv trace)
   -d              Project path (default: current directory)
+
+Environment variables:
+  CPI_MENU_LIMIT  Max plugins shown in fallback menu (default: 15)
 
 Subcommands:
   uninstall       Remove a plugin from one or more scopes
