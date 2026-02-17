@@ -157,9 +157,32 @@ If `sk` (skim) or `fzf` is installed, the menu automatically uses fuzzy search i
 
 The tool passes `--ansi --reverse --prompt "Plugin> "` to the finder.
 
+### Forcing Menu Mode (`--menu`)
+
+Override auto-detection with `--menu`:
+
+```bash
+# Force skim
+./claude-plugin-install --menu sk
+
+# Force fzf
+./claude-plugin-install --menu fzf
+
+# Force numbered list (no fuzzy finder)
+./claude-plugin-install --menu list
+```
+
+You can also set `CPI_MENU` as an environment variable for a persistent preference. The `--menu` flag takes priority over the env var.
+
+```bash
+export CPI_MENU=fzf
+./claude-plugin-install          # uses fzf
+./claude-plugin-install --menu sk  # overrides to sk
+```
+
 ### Fallback Mode
 
-When neither `sk` nor `fzf` is available, the tool falls back to a numbered menu.
+When neither `sk` nor `fzf` is available (and `--menu` is not set), the tool falls back to a numbered menu.
 
 * Select by number, or type comma-separated numbers (e.g., `1,2,3`) to select multiple
 * Type a new `plugin@marketplace` string to install directly
@@ -345,6 +368,7 @@ Install options:
   -r                    Shortcut: project-shared/repo scope
   -y, --yes             Non-interactive mode: skip all confirmation prompts
   -n, --dry-run         Show what would be done without making changes
+  --menu {sk,fzf,list}  Force menu mode (overrides auto-detection)
   -v, --verbose         Increase verbosity (-v=INFO, -vv=DEBUG, -vvv=TRACE)
   -d, --project-path    Project path (default: current directory)
   -h, --help            Show help message
@@ -367,6 +391,7 @@ Log subcommands:
   trim                  Trim log entries (--keep N, --days N)
 
 Environment variables:
+  CPI_MENU              Force menu mode: sk, fzf, or list (overridden by --menu flag)
   CPI_MENU_LIMIT        Max available plugins shown in fallback menu (default: 15)
 ```
 

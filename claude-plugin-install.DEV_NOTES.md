@@ -183,7 +183,7 @@ The `log trim` subcommand provides manual control:
 
 * **`ScopeDetector`** -- Detects which scopes (project-local, project-shared, user) have a given plugin installed. Reads settings files without modifying them. Also provides `detect_all_installed_plugins()` for the interactive menu.
 
-* **`MenuHandler`** -- Renders the interactive no-args menu. Shows installed plugins (from `ScopeDetector`) and remembered plugins (from `CacheManager`). Handles selection and routes to install/uninstall.
+* **`MenuHandler`** -- Renders the interactive no-args menu. Shows installed plugins (from `ScopeDetector`) and remembered plugins (from `CacheManager`). Handles selection and routes to install/uninstall. Supports forced menu mode via `--menu` flag or `CPI_MENU` env var. Uses `strip_ansi()` for reliable matching of sk/fzf output (these tools strip ANSI codes from stdout when `--ansi` is passed).
 
 ### Key functions
 

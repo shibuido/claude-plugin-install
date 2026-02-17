@@ -5,7 +5,7 @@ Fix Claude Code's plugin installation bug with one command. **Remembers your plu
 ## Features
 
 * **Plugin memory** -- Install once, select from an interactive menu forever. No more typing `plugin@marketplace` strings.
-* **Fuzzy search** -- Auto-detects [sk](https://github.com/lotabout/skim) or [fzf](https://github.com/junegunn/fzf) for instant search with TAB multi-select
+* **Fuzzy search** -- Auto-detects [sk](https://github.com/lotabout/skim) or [fzf](https://github.com/junegunn/fzf) for instant search with TAB multi-select (`--menu` to force mode)
 * **Marketplace sync** -- Import all available plugins with descriptions from your marketplaces (`cache sync`)
 * **Multi-scope** -- Install to project-local, project-shared, or user/global scope
 * **Batch operations** -- Select multiple plugins at once (TAB in fuzzy mode, comma-separated in fallback)

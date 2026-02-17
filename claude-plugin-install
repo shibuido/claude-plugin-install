@@ -30,6 +30,7 @@ Upstream issues:
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -56,6 +57,14 @@ VERBOSITY = 0
 
 def color(text: str, c: str) -> str:
     return f"{c}{text}{Colors.RESET}"
+
+
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences from text."""
+    return _ANSI_RE.sub("", text)
 
 
 def log_info(msg: str) -> None:
@@ -1004,7 +1013,9 @@ class MenuHandler:
         matched: list[dict] = []
         for sel in selected_lines:
             for item in items:
-                if item["line"].strip() == sel:
+                # sk/fzf with --ansi strip ANSI codes from stdout output,
+                # so compare stripped versions of both sides
+                if strip_ansi(item["line"]).strip() == strip_ansi(sel).strip():
                     matched.append(item)
                     break
 
@@ -1113,24 +1124,42 @@ class MenuHandler:
         return matched if matched else None
 
     @staticmethod
-    def display_menu(repo_path: Path) -> Optional[list[dict]]:
-        """Display interactive menu, return selected item(s)."""
+    def display_menu(repo_path: Path, menu_mode: Optional[str] = None) -> Optional[list[dict]]:
+        """Display interactive menu, return selected item(s).
+
+        menu_mode: None (auto-detect), "sk", "fzf", or "list".
+        Also reads CPI_MENU env var as fallback (--menu flag takes priority).
+        """
         items = MenuHandler._build_menu_items(repo_path)
         if not items:
             print("  No plugins available. Run: cache sync")
             return None
 
-        finder = MenuHandler._detect_fuzzy_finder()
-        if finder:
-            return MenuHandler._menu_fuzzy(items, finder, repo_path)
-        else:
+        if menu_mode is None:
+            env_mode = os.environ.get("CPI_MENU", "").lower()
+            if env_mode in ("sk", "fzf", "list"):
+                menu_mode = env_mode
+
+        if menu_mode == "list":
             return MenuHandler._menu_fallback(items, repo_path)
+        elif menu_mode in ("sk", "fzf"):
+            if not shutil.which(menu_mode):
+                print(f"  Error: '{menu_mode}' not found in PATH", file=sys.stderr)
+                return None
+            return MenuHandler._menu_fuzzy(items, menu_mode, repo_path)
+        else:
+            # Auto-detect
+            finder = MenuHandler._detect_fuzzy_finder()
+            if finder:
+                return MenuHandler._menu_fuzzy(items, finder, repo_path)
+            else:
+                return MenuHandler._menu_fallback(items, repo_path)
 
 
 def cmd_interactive_menu(args) -> int:
     """Interactive menu when no -p plugin is provided."""
     project_path = args.project_path.resolve()
-    selections = MenuHandler.display_menu(project_path)
+    selections = MenuHandler.display_menu(project_path, getattr(args, "menu", None))
     if not selections:
         return 0
 
@@ -1615,6 +1644,8 @@ RELATED ISSUES:
     parser.add_argument("-y", "--yes", "--non-interactive", dest="non_interactive",
                         action="store_true", help="Non-interactive mode")
     parser.add_argument("-n", "--dry-run", action="store_true", help="Preview changes only")
+    parser.add_argument("--menu", choices=["sk", "fzf", "list"],
+                        default=None, help="Force menu mode (sk, fzf, or list)")
     parser.add_argument("-s", "--scope", choices=["project-local", "project-shared", "user"],
                         default="project-local", help="Installation scope (default: project-local)")
     parser.add_argument("-l", dest="scope_shortcut", action="store_const",
